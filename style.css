@@ -1,0 +1,213 @@
+/* Mini Excel - how everything looks */
+
+:root {
+  --green: #217346;
+  --green-light: #d9eadf;
+  --line: #d4d4d4;
+  --head: #f3f3f3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  font: 13px/1.3 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: #222;
+  background: #fff;
+}
+
+#titlebar {
+  background: var(--green);
+  color: #fff;
+  font-weight: 600;
+  padding: 5px 12px;
+}
+
+/* ---- toolbar ---- */
+#toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 6px 10px;
+  background: var(--head);
+  border-bottom: 1px solid var(--line);
+}
+
+.group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn {
+  font: inherit;
+  padding: 3px 11px;
+  min-width: 30px;
+  background: #fff;
+  border: 1px solid #c6c6c6;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.btn:hover {
+  background: #eef7f1;
+}
+.btn.on {
+  background: #cfe9d9;
+  border-color: var(--green);
+}
+
+.fill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.fill input {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #c6c6c6;
+  background: #fff;
+}
+
+/* ---- name box + formula bar ---- */
+#formula-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+}
+#name-box {
+  width: 80px;
+  text-align: center;
+}
+#formula-bar {
+  flex: 1;
+}
+#formula-row input {
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid #c6c6c6;
+  border-radius: 3px;
+}
+#formula-row input:focus {
+  outline: 2px solid var(--green);
+  outline-offset: -1px;
+}
+.fx {
+  color: var(--green);
+  font-style: italic;
+  font-weight: 700;
+}
+
+/* ---- the grid ---- */
+#grid-wrap {
+  flex: 1;
+  overflow: auto;
+  outline: none;
+}
+
+/* 46px row numbers + 26 columns x 90px */
+#grid {
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+  width: 2386px;
+}
+
+#grid th,
+#grid td {
+  height: 24px;
+  padding: 0 4px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+#grid th {
+  position: sticky;
+  background: var(--head);
+  color: #444;
+  font-weight: 500;
+  text-align: center;
+  user-select: none;
+}
+#grid thead th {
+  top: 0;
+  z-index: 2;
+}
+#grid .colhead {
+  width: 90px;
+}
+#grid .rowhead {
+  left: 0;
+  z-index: 1;
+  width: 46px;
+}
+#grid .corner {
+  left: 0;
+  top: 0;
+  z-index: 3;
+  width: 46px;
+}
+#grid th.active {
+  background: var(--green-light);
+  color: var(--green);
+  font-weight: 700;
+}
+
+#grid td {
+  scroll-margin-top: 28px;
+  scroll-margin-left: 50px;
+}
+#grid td.selected {
+  outline: 2px solid var(--green);
+  outline-offset: -2px;
+}
+#grid td.num {
+  text-align: right;
+}
+#grid td.err {
+  text-align: center;
+  color: #b00020;
+}
+#grid td.b {
+  font-weight: 700;
+}
+#grid td.i {
+  font-style: italic;
+}
+#grid td.editing {
+  padding: 0;
+  overflow: visible;
+}
+
+.cell-editor {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  outline: none;
+  font: inherit;
+  background: #fff;
+}
+
+/* ---- bottom bar ---- */
+#status {
+  padding: 3px 12px;
+  background: var(--head);
+  border-top: 1px solid var(--line);
+  color: #555;
+}

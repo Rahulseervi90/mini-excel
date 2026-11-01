@@ -1,0 +1,31 @@
+{
+  "app": "mini-excel",
+  "version": 1,
+  "cells": {
+    "A1": { "v": "Item", "b": 1, "bg": "#d9eadf" },
+    "B1": { "v": "Qty", "b": 1, "bg": "#d9eadf" },
+    "C1": { "v": "Price", "b": 1, "bg": "#d9eadf" },
+    "D1": { "v": "Total", "b": 1, "bg": "#d9eadf" },
+    "A2": { "v": "Pens" },
+    "B2": { "v": "10" },
+    "C2": { "v": "12" },
+    "D2": { "v": "=B2*C2" },
+    "A3": { "v": "Notebooks" },
+    "B3": { "v": "5" },
+    "C3": { "v": "45" },
+    "D3": { "v": "=B3*C3" },
+    "A4": { "v": "Bags" },
+    "B4": { "v": "2" },
+    "C4": { "v": "650" },
+    "D4": { "v": "=B4*C4" },
+    "A5": { "v": "Total", "b": 1 },
+    "B5": { "v": "=SUM(B2:B4)", "b": 1 },
+    "D5": { "v": "=SUM(D2:D4)", "b": 1, "bg": "#ffff99" },
+    "A7": { "v": "Avg price" },
+    "C7": { "v": "=ROUND(AVERAGE(C2:C4),2)" },
+    "A8": { "v": "Big orders" },
+    "D8": { "v": "=COUNTIF(D2:D4,\">200\")" },
+    "A9": { "v": "Status", "i": 1 },
+    "B9": { "v": "=IF(D5>1500,\"Great month\",\"Keep going\")", "i": 1 }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "mini-excel",
+  "version": "0.1.0",
+  "description": "A small Excel-style spreadsheet desktop app, built from scratch",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/engine.test.js"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^45.2.1"
+  }
+}

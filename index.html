@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <title>Mini Excel</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div id="titlebar">Mini Excel</div>
+
+    <div id="toolbar">
+      <div class="group">
+        <button class="btn" id="btn-new" title="Start a new empty sheet">New</button>
+        <button class="btn" id="btn-open" title="Open a .json or .csv file (Ctrl+O)">Open</button>
+        <button class="btn" id="btn-save" title="Save as .json - keeps formulas and formatting (Ctrl+S)">Save</button>
+        <button class="btn" id="btn-csv" title="Export the shown values as .csv">Export CSV</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btn-bold" title="Bold (Ctrl+B)"><b>B</b></button>
+        <button class="btn" id="btn-italic" title="Italic (Ctrl+I)"><i>I</i></button>
+        <label class="fill" title="Fill color of the selected cell">
+          Fill <input type="color" id="fill-color" value="#ffff99" />
+        </label>
+        <button class="btn" id="btn-nofill" title="Remove the fill color">No fill</button>
+      </div>
+    </div>
+
+    <div id="formula-row">
+      <input id="name-box" type="text" spellcheck="false" title="Type a cell name like C5 and press Enter" />
+      <span class="fx">fx</span>
+      <input id="formula-bar" type="text" spellcheck="false" title="Edit the selected cell here" />
+    </div>
+
+    <div id="grid-wrap" tabindex="0">
+      <table id="grid"></table>
+    </div>
+
+    <div id="status">Ready</div>
+
+    <input type="file" id="file-input" accept=".json,.csv,text/csv,application/json" hidden />
+
+    <script src="src/engine.js"></script>
+    <script src="src/csv.js"></script>
+    <script src="src/grid.js"></script>
+  </body>
+</html>
