@@ -16,7 +16,10 @@
   const tds = []; // tds[row][col] -> the <td> on screen
   const colHeads = [];
   const rowHeads = [];
-  let sel = { c: 0, r: 0 }; // the selected cell
+  let sel = { c: 0, r: 0 }; // the active cell (where typing goes)
+  let ext = { c: 0, r: 0 }; // the opposite corner of the selected block (same as sel when one cell)
+  let dragging = false; // true while the mouse button is held down on the grid
+  let painted = null; // the block currently highlighted on screen
   let editing = null; // { input, c, r } while typing inside a cell
 
   // ---------- handy shortcuts ----------
@@ -26,6 +29,7 @@
   const nameBox = $('name-box');
   const formulaBar = $('formula-bar');
   const statusBar = $('status');
+  const summaryBar = $('summary');
   const fileInput = $('file-input');
   const btnBold = $('btn-bold');
   const btnItalic = $('btn-italic');
@@ -94,10 +98,60 @@
   // Any change can affect other cells (=A1+B1), so we redraw them all.
   function refreshAll() {
     for (let r = 0; r < MAX_ROWS; r++) for (let c = 0; c < MAX_COLS; c++) refreshCell(c, r);
+    updateSummary();
+  }
+
+  // ---------- the selected block ----------
+  // sel (active cell) and ext (other corner) are two corners of a rectangle.
+  // When they are the same cell, one cell is selected.
+  function range() {
+    return {
+      c1: Math.min(sel.c, ext.c),
+      r1: Math.min(sel.r, ext.r),
+      c2: Math.max(sel.c, ext.c),
+      r2: Math.max(sel.r, ext.r),
+    };
+  }
+  const isMulti = (g) => g.c1 !== g.c2 || g.r1 !== g.r2;
+
+  // Run something for every cell in the selected block.
+  function eachInRange(fn) {
+    const g = range();
+    for (let r = g.r1; r <= g.r2; r++) for (let c = g.c1; c <= g.c2; c++) fn(c, r);
+  }
+
+  // Colour the selected block green and outline its edge.
+  function paint() {
+    if (painted) {
+      const p = painted.g;
+      for (let c = p.c1; c <= p.c2; c++) colHeads[c].classList.remove('active');
+      for (let r = p.r1; r <= p.r2; r++) {
+        rowHeads[r].classList.remove('active');
+        for (let c = p.c1; c <= p.c2; c++) tds[r][c].classList.remove('inrange', 'rt', 'rb', 'rl', 'rr');
+      }
+      tds[painted.a.r][painted.a.c].classList.remove('selected');
+    }
+    const g = range();
+    for (let c = g.c1; c <= g.c2; c++) colHeads[c].classList.add('active');
+    for (let r = g.r1; r <= g.r2; r++) {
+      rowHeads[r].classList.add('active');
+      if (!isMulti(g)) continue;
+      for (let c = g.c1; c <= g.c2; c++) {
+        const td = tds[r][c];
+        td.classList.add('inrange');
+        if (r === g.r1) td.classList.add('rt');
+        if (r === g.r2) td.classList.add('rb');
+        if (c === g.c1) td.classList.add('rl');
+        if (c === g.c2) td.classList.add('rr');
+      }
+    }
+    tds[sel.r][sel.c].classList.add('selected');
+    painted = { g, a: { c: sel.c, r: sel.r } };
   }
 
   function updateBars() {
-    nameBox.value = refName(sel.c, sel.r);
+    const g = range();
+    nameBox.value = isMulti(g) ? refName(g.c1, g.r1) + ':' + refName(g.c2, g.r2) : refName(sel.c, sel.r);
     formulaBar.value = sheet.getRaw(sel.c, sel.r);
     const st = styles.get(key(sel.c, sel.r)) || {};
     btnBold.classList.toggle('on', !!st.b);
@@ -105,23 +159,77 @@
     if (st.bg) fillColor.value = st.bg;
   }
 
-  function select(c, r) {
+  const fmt = (n) => String(parseFloat(n.toPrecision(12)));
+
+  // Bottom-right of the screen: Average / Count / Sum of the selected block.
+  function updateSummary() {
+    const g = range();
+    if (!isMulti(g)) {
+      summaryBar.textContent = '';
+      return;
+    }
+    let count = 0; // cells that are not empty
+    let nums = 0; // cells that hold a number
+    let total = 0;
+    eachInRange((c, r) => {
+      const v = sheet.getValue(c, r);
+      if (v === null) return;
+      count++;
+      if (typeof v === 'number') {
+        nums++;
+        total += v;
+      }
+    });
+    if (count === 0) summaryBar.textContent = '';
+    else if (nums === 0) summaryBar.textContent = 'Count: ' + count;
+    else summaryBar.textContent = 'Average: ' + fmt(Math.round((total / nums) * 10000) / 10000) + '     Count: ' + count + '     Sum: ' + fmt(total);
+  }
+
+  function selectionChanged() {
+    paint();
+    updateBars();
+    updateSummary();
+  }
+
+  // Click a cell: select just that one.
+  function select(c, r, scroll = true) {
     c = clamp(c, 0, MAX_COLS - 1);
     r = clamp(r, 0, MAX_ROWS - 1);
-    tds[sel.r][sel.c].classList.remove('selected');
-    colHeads[sel.c].classList.remove('active');
-    rowHeads[sel.r].classList.remove('active');
     sel = { c, r };
+    ext = { c, r };
+    selectionChanged();
+    if (scroll) scrollTo(c, r);
+  }
+
+  // Shift+click, drag or Shift+arrows: stretch the block to this cell.
+  function extendTo(c, r, scroll = true) {
+    c = clamp(c, 0, MAX_COLS - 1);
+    r = clamp(r, 0, MAX_ROWS - 1);
+    if (ext.c === c && ext.r === r) return;
+    ext = { c, r };
+    selectionChanged();
+    if (scroll) scrollTo(c, r);
+  }
+
+  function scrollTo(c, r) {
     const td = tds[r][c];
-    td.classList.add('selected');
-    colHeads[c].classList.add('active');
-    rowHeads[r].classList.add('active');
     if (td.scrollIntoView) td.scrollIntoView({ block: 'nearest', inline: 'nearest' });
-    updateBars();
+  }
+
+  function selectAll() {
+    select(0, 0, false);
+    extendTo(MAX_COLS - 1, MAX_ROWS - 1, false);
   }
 
   function move(dc, dr) {
     select(sel.c + dc, sel.r + dr);
+  }
+
+  // Empty every cell in the selected block.
+  function clearRange() {
+    eachInRange((c, r) => sheet.setRaw(c, r, ''));
+    refreshAll();
+    updateBars();
   }
 
   function setCell(c, r, text) {
@@ -188,23 +296,31 @@
   }
 
   // ---------- formatting ----------
+  // Apply a style change to every selected cell.
   function changeStyle(change) {
-    const k = key(sel.c, sel.r);
-    const st = Object.assign({}, styles.get(k));
-    change(st);
-    if (!st.b && !st.i && !st.bg) styles.delete(k);
-    else styles.set(k, st);
-    refreshCell(sel.c, sel.r);
+    eachInRange((c, r) => {
+      const k = key(c, r);
+      const st = Object.assign({}, styles.get(k));
+      change(st);
+      if (!st.b && !st.i && !st.bg) styles.delete(k);
+      else styles.set(k, st);
+      refreshCell(c, r);
+    });
     updateBars();
   }
-  const toggleBold = () =>
+  // Decide from the active cell, then give the whole block the same result.
+  const toggleBold = () => {
+    const on = !(styles.get(key(sel.c, sel.r)) || {}).b;
     changeStyle((st) => {
-      st.b = !st.b;
+      st.b = on;
     });
-  const toggleItalic = () =>
+  };
+  const toggleItalic = () => {
+    const on = !(styles.get(key(sel.c, sel.r)) || {}).i;
     changeStyle((st) => {
-      st.i = !st.i;
+      st.i = on;
     });
+  };
 
   // ---------- files ----------
   function download(filename, text, mime) {
@@ -258,7 +374,7 @@
       for (let c = 0; c <= maxC; c++) row.push(sheet.display(c, r));
       rows.push(row);
     }
-    download('my-sheet.csv', '﻿' + toCSV(rows), 'text/csv;charset=utf-8');
+    download('my-sheet.csv', '\uFEFF' + toCSV(rows), 'text/csv;charset=utf-8');
     setStatus('Exported my-sheet.csv (check your Downloads folder)');
   }
 
@@ -339,11 +455,42 @@
   table.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'INPUT') return; // clicking inside the cell editor
     const td = e.target.closest('td');
-    if (!td) return;
+    const th = e.target.closest('th');
+    if (!td && !th) return;
     e.preventDefault();
     if (editing) commitEdit(0, 0);
-    select(Number(td.dataset.c), Number(td.dataset.r));
     gridWrap.focus({ preventScroll: true });
+    if (td) {
+      const c = Number(td.dataset.c);
+      const r = Number(td.dataset.r);
+      if (e.shiftKey) extendTo(c, r); // Shift+click stretches the block
+      else select(c, r);
+      dragging = true; // moving the mouse now stretches the block
+    } else if (th.classList.contains('colhead')) {
+      const c = colHeads.indexOf(th); // click a column letter: whole column
+      select(c, 0, false);
+      extendTo(c, MAX_ROWS - 1, false);
+    } else if (th.classList.contains('rowhead')) {
+      const r = rowHeads.indexOf(th); // click a row number: whole row
+      select(0, r, false);
+      extendTo(MAX_COLS - 1, r, false);
+    } else {
+      selectAll(); // the empty corner box
+    }
+  });
+
+  table.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    if (e.buttons === 0) {
+      dragging = false; // the button was let go outside the grid
+      return;
+    }
+    const td = e.target.closest('td');
+    if (td) extendTo(Number(td.dataset.c), Number(td.dataset.r));
+  });
+
+  document.addEventListener('mouseup', () => {
+    dragging = false;
   });
 
   table.addEventListener('dblclick', (e) => {
@@ -373,26 +520,32 @@
       } else if (k === 'o') {
         e.preventDefault();
         fileInput.click();
+      } else if (k === 'a') {
+        e.preventDefault();
+        selectAll();
       }
       return;
     }
 
+    // Arrow keys move; with Shift they stretch the selected block instead.
+    const arrow = (dc, dr) => {
+      e.preventDefault();
+      if (e.shiftKey) extendTo(ext.c + dc, ext.r + dr);
+      else move(dc, dr);
+    };
+
     switch (e.key) {
       case 'ArrowUp':
-        e.preventDefault();
-        move(0, -1);
+        arrow(0, -1);
         break;
       case 'ArrowDown':
-        e.preventDefault();
-        move(0, 1);
+        arrow(0, 1);
         break;
       case 'ArrowLeft':
-        e.preventDefault();
-        move(-1, 0);
+        arrow(-1, 0);
         break;
       case 'ArrowRight':
-        e.preventDefault();
-        move(1, 0);
+        arrow(1, 0);
         break;
       case 'Tab':
         e.preventDefault();
@@ -421,8 +574,7 @@
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
-        setCell(sel.c, sel.r, '');
-        updateBars();
+        clearRange();
         break;
       default:
         // Typing a letter or number starts editing the selected cell.
@@ -451,9 +603,14 @@
   nameBox.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      const p = parseRef(nameBox.value.trim());
-      if (p && p.c >= 0 && p.r >= 0 && p.c < MAX_COLS && p.r < MAX_ROWS) {
-        select(p.c, p.r);
+      // Accepts one cell (C5) or a block (A1:B3).
+      const parts = nameBox.value.trim().split(':');
+      const a = parseRef(parts[0]);
+      const b = parts.length === 2 ? parseRef(parts[1]) : a;
+      const inGrid = (p) => p && p.c >= 0 && p.r >= 0 && p.c < MAX_COLS && p.r < MAX_ROWS;
+      if (parts.length <= 2 && inGrid(a) && inGrid(b)) {
+        select(a.c, a.r);
+        if (parts.length === 2) extendTo(b.c, b.r);
         gridWrap.focus({ preventScroll: true });
       } else {
         setStatus('"' + nameBox.value + '" is outside the grid (A1 to ' + refName(MAX_COLS - 1, MAX_ROWS - 1) + ')');

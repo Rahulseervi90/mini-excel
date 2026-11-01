@@ -171,9 +171,30 @@ body {
   scroll-margin-top: 28px;
   scroll-margin-left: 50px;
 }
+/* a block of selected cells: light green tint + a green frame around the edge */
+#grid td.inrange {
+  background-image: linear-gradient(rgba(33, 115, 70, 0.16), rgba(33, 115, 70, 0.16));
+  box-shadow: var(--sh-t, inset 0 0 0 0 transparent), var(--sh-b, inset 0 0 0 0 transparent),
+    var(--sh-l, inset 0 0 0 0 transparent), var(--sh-r, inset 0 0 0 0 transparent);
+}
+#grid td.rt {
+  --sh-t: inset 0 2px 0 0 var(--green);
+}
+#grid td.rb {
+  --sh-b: inset 0 -2px 0 0 var(--green);
+}
+#grid td.rl {
+  --sh-l: inset 2px 0 0 0 var(--green);
+}
+#grid td.rr {
+  --sh-r: inset -2px 0 0 0 var(--green);
+}
 #grid td.selected {
   outline: 2px solid var(--green);
   outline-offset: -2px;
+}
+#grid td.inrange.selected {
+  background-image: none; /* the active cell stays plain, like Excel */
 }
 #grid td.num {
   text-align: right;
@@ -205,9 +226,17 @@ body {
 }
 
 /* ---- bottom bar ---- */
-#status {
+#statusbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
   padding: 3px 12px;
   background: var(--head);
   border-top: 1px solid var(--line);
   color: #555;
+}
+#summary {
+  white-space: pre;
+  font-weight: 600;
+  color: #333;
 }
