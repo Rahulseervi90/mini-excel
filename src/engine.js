@@ -58,6 +58,32 @@
     return colName(c) + (r + 1);
   }
 
+  // Copy and paste: move every cell name inside a formula by dc columns and dr rows,
+  // the way Excel does. Copy =A1+B1 one row down and it becomes =A2+B2.
+  //  - A name with a $ keeps that part fixed:  $A$1 never moves, A$1 keeps its row.
+  //  - Text inside "quotes" is left alone.
+  //  - A name that would fall off the top or left edge becomes ZZ0, which the engine
+  //    reports as #REF! (Excel also shows #REF! there).
+  const NAME_IN_FORMULA = /(?<![A-Za-z0-9_.$])(\$?)([A-Za-z]{1,3})(\$?)(\d+)(?![A-Za-z0-9_(.])/g;
+  function shiftFormula(raw, dc, dr) {
+    if (typeof raw !== 'string' || raw.length < 2 || raw[0] !== '=' || (dc === 0 && dr === 0)) return raw;
+    // split() with a capture group puts every "quoted text" at an odd position
+    return raw
+      .split(/("(?:[^"]|"")*")/)
+      .map((piece, i) => {
+        if (i % 2 === 1) return piece;
+        return piece.replace(NAME_IN_FORMULA, (whole, dollarCol, letters, dollarRow, digits) => {
+          let c = colIndex(letters);
+          let r = parseInt(digits, 10) - 1;
+          if (!dollarCol) c += dc;
+          if (!dollarRow) r += dr;
+          if (c < 0 || r < 0) return 'ZZ0';
+          return dollarCol + colName(c) + dollarRow + (r + 1);
+        });
+      })
+      .join('');
+  }
+
   // A cell range such as A1:B3 arrives inside functions as one of these.
   class Range {
     constructor(values) {
@@ -724,5 +750,6 @@
     parseRef,
     refName,
     parse,
+    shiftFormula,
   };
 });

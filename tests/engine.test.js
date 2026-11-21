@@ -1,7 +1,7 @@
 // Tests for the formula engine. Run with:  npm test
 // Each line says: "if the cells contain THIS, cell X should show THAT".
 const assert = require('assert');
-const { Sheet, parseRef, colName, MAX_ROWS } = require('../src/engine.js');
+const { Sheet, parseRef, colName, MAX_ROWS, shiftFormula } = require('../src/engine.js');
 const { parseCSV, toCSV } = require('../src/csv.js');
 
 let passed = 0;
@@ -234,6 +234,64 @@ test('CSV round trip', () => {
   assert.deepStrictEqual(parseCSV('a,,c\n'), [['a', '', 'c']]);
   assert.deepStrictEqual(parseCSV('﻿x,y'), [['x', 'y']]);
   assert.deepStrictEqual(parseCSV(''), []);
+});
+
+// ---------- copy and paste ----------
+test('copy-paste: formulas shift like Excel', () => {
+  assert.strictEqual(shiftFormula('=A1+B1', 0, 1), '=A2+B2');
+  assert.strictEqual(shiftFormula('=A1+B1', 2, 0), '=C1+D1');
+  assert.strictEqual(shiftFormula('=A1+B1', 2, 3), '=C4+D4');
+  assert.strictEqual(shiftFormula('=$A$1+A1', 1, 1), '=$A$1+B2'); // $A$1 never moves
+  assert.strictEqual(shiftFormula('=$A1+A$1', 1, 1), '=$A2+B$1'); // $ fixes just that part
+  assert.strictEqual(shiftFormula('=SUM(A1:A3)', 0, 1), '=SUM(A2:A4)');
+  assert.strictEqual(shiftFormula('=SUM(A1:B2)', 1, 1), '=SUM(B2:C3)');
+  assert.strictEqual(shiftFormula('="A1"&A1', 0, 1), '="A1"&A2'); // text in quotes is left alone
+  assert.strictEqual(shiftFormula('="say ""A1"""&A1', 0, 1), '="say ""A1"""&A2');
+  assert.strictEqual(shiftFormula('=a1+1', 0, 1), '=A2+1');
+  assert.strictEqual(shiftFormula('=1E3+A1', 0, 1), '=1E3+A2'); // 1E3 is a number, not a cell
+  assert.strictEqual(shiftFormula('=ATAN2(A1)', 0, 1), '=ATAN2(A2)'); // a name with digits before ( is a function
+  assert.strictEqual(shiftFormula('=IF(A1>5,"big","small")', 0, 1), '=IF(A2>5,"big","small")');
+  assert.strictEqual(shiftFormula('=B2+C3', -1, -1), '=A1+B2');
+});
+
+test('copy-paste: things that must not change', () => {
+  assert.strictEqual(shiftFormula('A1', 0, 1), 'A1'); // plain text
+  assert.strictEqual(shiftFormula('hello', 3, 3), 'hello');
+  assert.strictEqual(shiftFormula('=', 0, 1), '=');
+  assert.strictEqual(shiftFormula('=A1+B1', 0, 0), '=A1+B1'); // no movement
+  assert.strictEqual(shiftFormula('', 1, 1), '');
+  assert.strictEqual(shiftFormula(undefined, 1, 1), undefined);
+});
+
+test('copy-paste: moved formulas give the right numbers', () => {
+  // C1 holds =A1+B1. Copy it to C2 and it must add A2 and B2.
+  const show = make({ A1: '1', B1: '2', A2: '10', B2: '20', C1: '=A1+B1', C2: shiftFormula('=A1+B1', 0, 1) });
+  assert.strictEqual(show('C1'), '3');
+  assert.strictEqual(show('C2'), '30');
+  // a total that points at a fixed cell
+  const s2 = make({ A1: '5', B1: '=A1*$D$1', B2: shiftFormula('=A1*$D$1', 0, 1), A2: '7', D1: '2' });
+  assert.strictEqual(s2('B1'), '10');
+  assert.strictEqual(s2('B2'), '14');
+});
+
+test('copy-paste: falling off the sheet gives #REF!', () => {
+  assert.strictEqual(calc(shiftFormula('=A1+1', -1, 0)), '#REF!'); // left of column A
+  assert.strictEqual(calc(shiftFormula('=A2+1', 0, -2)), '#REF!'); // above row 1
+  assert.strictEqual(calc(shiftFormula('=Z1+1', 1, 0)), '#REF!'); // right of column Z
+  assert.strictEqual(shiftFormula('=Z1', 1, 0), '=AA1');
+  assert.strictEqual(calc(shiftFormula('=SUM(A1:A2)', -1, 0)), '#REF!');
+});
+
+test('CSV with tabs (used for the clipboard)', () => {
+  assert.strictEqual(toCSV([['a', 'b c'], ['1', '2']], '\t'), 'a\tb c\r\n1\t2');
+  assert.strictEqual(toCSV([['x\ty', 'z']], '\t'), '"x\ty"\tz');
+  assert.strictEqual(toCSV([['a,b', '1']], '\t'), 'a,b\t1'); // commas are plain text here
+  const rows = [['a', 'b c'], ['x\ty', 'say "hi"'], ['two\nlines', '3']];
+  assert.deepStrictEqual(parseCSV(toCSV(rows, '\t'), '\t'), rows);
+  assert.deepStrictEqual(parseCSV('1\t2\n3\t4', '\t'), [['1', '2'], ['3', '4']]);
+  assert.deepStrictEqual(parseCSV('1\t2\r\n3\t4\r\n', '\t'), [['1', '2'], ['3', '4']]);
+  assert.deepStrictEqual(parseCSV('a,b\t1', '\t'), [['a,b', '1']]);
+  assert.deepStrictEqual(parseCSV('a,b'), [['a', 'b']]); // the default is still a comma
 });
 
 console.log('\n' + passed + ' test groups passed, ' + failed + ' failed');

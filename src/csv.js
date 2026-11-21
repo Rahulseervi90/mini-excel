@@ -9,7 +9,8 @@
   'use strict';
 
   // "a,b\n1,2" -> [["a","b"],["1","2"]]   (handles "quoted, text" and "" inside quotes)
-  function parseCSV(text) {
+  // delim is the character between cells: a comma for CSV files, a tab for the clipboard.
+  function parseCSV(text, delim = ',') {
     if (text.charCodeAt(0) === 0xfeff) text = text.slice(1); // byte-order mark from Excel
     const rows = [];
     let row = [];
@@ -30,7 +31,7 @@
         }
       } else if (ch === '"' && field === '') {
         inQuotes = true;
-      } else if (ch === ',') {
+      } else if (ch === delim) {
         row.push(field);
         field = '';
       } else if (ch === '\n' || ch === '\r') {
@@ -51,9 +52,9 @@
   }
 
   // [["a","b"],["1","x,y"]] -> 'a,b\r\n1,"x,y"'
-  function toCSV(rows) {
-    const quote = (s) => (/[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
-    return rows.map((row) => row.map((v) => quote(String(v))).join(',')).join('\r\n');
+  function toCSV(rows, delim = ',') {
+    const quote = (s) => (s.indexOf(delim) !== -1 || /["\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s);
+    return rows.map((row) => row.map((v) => quote(String(v))).join(delim)).join('\r\n');
   }
 
   return { parseCSV, toCSV };

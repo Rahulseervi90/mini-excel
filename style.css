@@ -5,6 +5,7 @@
   --green-light: #d9eadf;
   --line: #d4d4d4;
   --head: #f3f3f3;
+  --clip: #d9730d;
 }
 
 * {
@@ -188,6 +189,28 @@ body {
 }
 #grid td.rr {
   --sh-r: inset -2px 0 0 0 var(--green);
+}
+/* copied or cut cells get a dashed orange frame until you paste or press Esc */
+#grid td {
+  position: relative;
+}
+#grid td.clip::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+#grid td.ct::after {
+  border-top: 2px dashed var(--clip);
+}
+#grid td.cb::after {
+  border-bottom: 2px dashed var(--clip);
+}
+#grid td.cl::after {
+  border-left: 2px dashed var(--clip);
+}
+#grid td.cr::after {
+  border-right: 2px dashed var(--clip);
 }
 #grid td.selected {
   outline: 2px solid var(--green);

@@ -23,6 +23,12 @@ Try **Open** and pick `examples/sales-demo.json` to see a finished sheet.
 - Select many cells: drag with the mouse, `Shift`+click, or `Shift`+arrow keys. Click a column letter or row
   number to select the whole column or row; click the corner box or press `Ctrl+A` for everything.
 - The bottom-right shows Average, Count and Sum of the selected cells.
+- Copy, cut and paste: `Ctrl+C`, `Ctrl+X`, `Ctrl+V` (or the Cut / Copy / Paste buttons). A dashed orange frame
+  marks what you copied; `Esc` removes it.
+  - A copied formula follows the move, like Excel: `=A1+B1` pasted one row down becomes `=A2+B2`.
+    A `$` keeps that part fixed (`$A$1` never moves). A cut formula keeps its names exactly.
+  - Bold, italic and fill color travel with the cells. One copied cell pasted onto a selected block fills it.
+  - Text copied in other programs (Excel, Google Sheets, Notepad) can be pasted in, and the other way round.
 - `Delete`, bold, italic and fill color apply to every selected cell.
 - Bold, italic, fill color. Name box (type `C5` or a block like `A1:B3` to jump). Formula bar.
 - Save (`.json`, keeps formulas and formatting), Open (`.json` or `.csv`), Export CSV.
@@ -36,14 +42,13 @@ Try **Open** and pick `examples/sales-demo.json` to see a finished sheet.
 | `index.html`, `style.css` | The page layout and look |
 | `src/grid.js` | The screen: grid, keyboard, mouse, toolbar, files |
 | `src/engine.js` | The brain: reads formulas and works out answers (no screen code) |
-| `src/csv.js` | Reads and writes CSV text |
+| `src/csv.js` | Reads and writes CSV text (and tab-separated text for the clipboard) |
 | `tests/engine.test.js` | Checks the engine: "this input should give that answer" |
 
 ## Ideas for what to build next
 
-1. Copy and paste (`Ctrl+C` / `Ctrl+V`), now that blocks can be selected
-2. Undo and redo (`Ctrl+Z` / `Ctrl+Y`)
-3. Let long text spill into empty cells on its right
-4. Resize columns by dragging the header edge
-5. More functions: VLOOKUP, TODAY, TEXT, ...
-6. Charts
+1. Undo and redo (`Ctrl+Z` / `Ctrl+Y`). Paste overwrites cells, so this is the most useful next step
+2. Let long text spill into empty cells on its right
+3. Resize columns by dragging the header edge
+4. More functions: VLOOKUP, TODAY, TEXT, ...
+5. Charts

@@ -7,7 +7,7 @@
 (function () {
   'use strict';
 
-  const { Sheet, FormulaError, MAX_COLS, MAX_ROWS, colName, refName, parseRef } = window.Engine;
+  const { Sheet, FormulaError, MAX_COLS, MAX_ROWS, colName, refName, parseRef, shiftFormula } = window.Engine;
   const { parseCSV, toCSV } = window.Csv;
 
   // ---------- the app's memory ----------
@@ -237,6 +237,174 @@
     refreshAll();
   }
 
+  // ---------- copy, cut and paste ----------
+  // The app keeps its own copy of the cells (formulas and formatting). It also puts the
+  // shown values on the real clipboard as tab-separated text, so other programs can
+  // paste them, and so text copied elsewhere can be pasted here.
+  let clip = null; // { c1, r1, cols, rows, cells: [[{ raw, st }]], cut }
+  let lastCopiedText = ''; // the text we last put on the real clipboard
+  let copyReachedClipboard = false; // did that really work?
+  let clipPainted = null; // the block drawn with the dashed frame
+
+  function unmarkClip() {
+    if (!clipPainted) return;
+    const g = clipPainted;
+    for (let r = g.r1; r <= g.r2; r++)
+      for (let c = g.c1; c <= g.c2; c++) tds[r][c].classList.remove('clip', 'ct', 'cb', 'cl', 'cr');
+    clipPainted = null;
+  }
+
+  function markClip(g) {
+    unmarkClip();
+    for (let r = g.r1; r <= g.r2; r++) {
+      for (let c = g.c1; c <= g.c2; c++) {
+        const td = tds[r][c];
+        td.classList.add('clip');
+        if (r === g.r1) td.classList.add('ct');
+        if (r === g.r2) td.classList.add('cb');
+        if (c === g.c1) td.classList.add('cl');
+        if (c === g.c2) td.classList.add('cr');
+      }
+    }
+    clipPainted = g;
+  }
+
+  function clearClip() {
+    clip = null;
+    unmarkClip();
+  }
+
+  const blockName = (g) =>
+    g.c1 === g.c2 && g.r1 === g.r2 ? refName(g.c1, g.r1) : refName(g.c1, g.r1) + ':' + refName(g.c2, g.r2);
+
+  function doCopy(cut) {
+    if (editing) commitEdit(0, 0); // finish typing first
+    const g = range();
+    const cells = [];
+    const shownRows = [];
+    for (let r = g.r1; r <= g.r2; r++) {
+      const line = [];
+      const shown = [];
+      for (let c = g.c1; c <= g.c2; c++) {
+        line.push({ raw: sheet.getRaw(c, r), st: Object.assign({}, styles.get(key(c, r))) });
+        shown.push(sheet.display(c, r));
+      }
+      cells.push(line);
+      shownRows.push(shown);
+    }
+    clip = { c1: g.c1, r1: g.r1, cols: g.c2 - g.c1 + 1, rows: g.r2 - g.r1 + 1, cells, cut: !!cut };
+    lastCopiedText = toCSV(shownRows, '\t');
+    copyReachedClipboard = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(lastCopiedText).then(
+          () => {
+            copyReachedClipboard = true;
+          },
+          () => {}
+        );
+      }
+    } catch (e) {
+      /* the real clipboard is not available: the app's own copy still works */
+    }
+    markClip(g);
+    const n = clip.cols * clip.rows;
+    setStatus(
+      (cut ? 'Cut ' : 'Copied ') + n + (n === 1 ? ' cell' : ' cells') + ' (' + blockName(g) + '). ' +
+        'Click where it should go and press Ctrl+V' + (cut ? ' to move it.' : '.')
+    );
+  }
+
+  function setStyleOf(c, r, st) {
+    if (st === undefined) return; // pasted text: keep the formatting already there
+    if (st.b || st.i || st.bg) styles.set(key(c, r), { b: !!st.b, i: !!st.i, bg: st.bg });
+    else styles.delete(key(c, r));
+  }
+
+  // Put a copied block down with its top-left corner at the selected cell.
+  // One copied cell pasted onto a selected block fills the whole block.
+  function pasteBlock(src) {
+    const g = range();
+    const fill = src.cols === 1 && src.rows === 1 && isMulti(g);
+    const spots = [];
+    if (fill) eachInRange((c, r) => spots.push({ c, r }));
+    else spots.push({ c: g.c1, r: g.r1 });
+
+    if (src.cut) {
+      // moving: empty the old place first (the new place may overlap it)
+      for (let j = 0; j < src.rows; j++) {
+        for (let i = 0; i < src.cols; i++) {
+          sheet.setRaw(src.c1 + i, src.r1 + j, '');
+          styles.delete(key(src.c1 + i, src.r1 + j));
+        }
+      }
+    }
+
+    let skipped = 0;
+    spots.forEach((spot) => {
+      for (let j = 0; j < src.rows; j++) {
+        for (let i = 0; i < src.cols; i++) {
+          const c = spot.c + i;
+          const r = spot.r + j;
+          if (c >= MAX_COLS || r >= MAX_ROWS) {
+            skipped++;
+            continue;
+          }
+          const cell = src.cells[j][i];
+          // a copied formula follows the move (=A1 one row down is =A2); a moved one keeps its names
+          const raw = src.cut || src.plain ? cell.raw : shiftFormula(cell.raw, spot.c - src.c1, spot.r - src.r1);
+          sheet.setRaw(c, r, raw);
+          setStyleOf(c, r, cell.st);
+        }
+      }
+    });
+    refreshAll();
+
+    const first = spots[0];
+    if (!fill) {
+      select(first.c, first.r);
+      extendTo(Math.min(first.c + src.cols - 1, MAX_COLS - 1), Math.min(first.r + src.rows - 1, MAX_ROWS - 1));
+    } else {
+      updateBars();
+    }
+    if (src.cut) clearClip(); // a cut can be pasted once
+    const n = src.cols * src.rows * spots.length - skipped;
+    setStatus(
+      'Pasted ' + n + (n === 1 ? ' cell' : ' cells') + ' at ' + blockName(range()) +
+        (skipped ? ' (' + skipped + ' did not fit inside the grid and were left out)' : '')
+    );
+  }
+
+  // Text from another program: rows are lines, cells are separated by tabs.
+  function pasteText(text) {
+    const rows = parseCSV(text, '\t');
+    if (!rows.length) {
+      setStatus('There was no text to paste');
+      return;
+    }
+    const cols = rows.reduce((m, row) => Math.max(m, row.length), 1);
+    const cells = rows.map((row) => {
+      const line = [];
+      for (let i = 0; i < cols; i++) line.push({ raw: row[i] === undefined ? '' : row[i], st: undefined });
+      return line;
+    });
+    pasteBlock({ c1: 0, r1: 0, cols, rows: rows.length, cells, cut: false, plain: true });
+  }
+
+  async function doPaste() {
+    if (editing) commitEdit(0, 0);
+    let outside = '';
+    try {
+      if (navigator.clipboard && navigator.clipboard.readText) outside = await navigator.clipboard.readText();
+    } catch (e) {
+      outside = ''; // reading the real clipboard was not allowed: use the app's own copy
+    }
+    // Our own copy wins unless something newer was copied in another program.
+    if (clip && (!copyReachedClipboard || outside === '' || outside === lastCopiedText)) pasteBlock(clip);
+    else if (outside) pasteText(outside);
+    else setStatus('Nothing to paste yet. Select some cells and press Ctrl+C first.');
+  }
+
   // ---------- typing inside a cell ----------
   function startEdit(initialText) {
     if (editing) return;
@@ -381,6 +549,7 @@
   function resetSheet() {
     sheet.clear();
     styles.clear();
+    clearClip();
   }
 
   function finishLoading(message) {
@@ -523,6 +692,15 @@
       } else if (k === 'a') {
         e.preventDefault();
         selectAll();
+      } else if (k === 'c') {
+        e.preventDefault();
+        doCopy(false);
+      } else if (k === 'x') {
+        e.preventDefault();
+        doCopy(true);
+      } else if (k === 'v') {
+        e.preventDefault();
+        doPaste();
       }
       return;
     }
@@ -566,6 +744,13 @@
       case 'Home':
         e.preventDefault();
         select(0, sel.r);
+        break;
+      case 'Escape':
+        e.preventDefault();
+        if (clip) {
+          clearClip();
+          setStatus('Copy cancelled');
+        }
         break;
       case 'F2':
         e.preventDefault();
@@ -641,6 +826,9 @@
       delete st.bg;
     })
   );
+  $('btn-cut').addEventListener('click', () => doCopy(true));
+  $('btn-copy').addEventListener('click', () => doCopy(false));
+  $('btn-paste').addEventListener('click', doPaste);
   $('btn-save').addEventListener('click', saveFile);
   $('btn-csv').addEventListener('click', exportCSV);
   $('btn-open').addEventListener('click', () => fileInput.click());
