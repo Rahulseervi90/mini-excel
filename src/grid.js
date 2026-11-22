@@ -21,6 +21,9 @@
   let dragging = false; // true while the mouse button is held down on the grid
   let painted = null; // the block currently highlighted on screen
   let editing = null; // { input, c, r } while typing inside a cell
+  const DEFAULT_W = 90;
+  let colWidths = new Array(MAX_COLS).fill(DEFAULT_W); // width of each column in pixels
+  const cols = []; // the <col> tags that hold those widths
 
   // ---------- handy shortcuts ----------
   const $ = (id) => document.getElementById(id);
@@ -43,6 +46,18 @@
 
   // ---------- draw the empty grid once ----------
   function build() {
+    const group = document.createElement('colgroup');
+    const first = document.createElement('col');
+    first.style.width = '46px';
+    group.appendChild(first);
+    for (let c = 0; c < MAX_COLS; c++) {
+      const col = document.createElement('col');
+      cols.push(col);
+      group.appendChild(col);
+    }
+    table.appendChild(group);
+    applyWidths();
+
     const thead = document.createElement('thead');
     const headRow = document.createElement('tr');
     const corner = document.createElement('th');
@@ -79,6 +94,149 @@
     table.appendChild(tbody);
   }
 
+  function applyWidths() {
+    let total = 46;
+    for (let c = 0; c < MAX_COLS; c++) {
+      cols[c].style.width = colWidths[c] + 'px';
+      total += colWidths[c];
+    }
+    table.style.width = total + 'px';
+  }
+
+  // ---------- undo and redo ----------
+  // Before every change we keep a photo of the whole sheet. Undo brings the last photo back.
+  const undoStack = [];
+  const redoStack = [];
+  let lastTag = '';
+  let lastTime = 0;
+
+  function snapshot() {
+    return {
+      raw: [...sheet.raw],
+      styles: [...styles].map(([k, v]) => [k, Object.assign({}, v)]),
+      widths: colWidths.slice(),
+    };
+  }
+
+  function restore(snap) {
+    sheet.clear();
+    for (const [k, v] of snap.raw) {
+      const [c, r] = k.split(',').map(Number);
+      sheet.setRaw(c, r, v);
+    }
+    styles.clear();
+    snap.styles.forEach(([k, v]) => styles.set(k, Object.assign({}, v)));
+    colWidths = snap.widths.slice();
+    applyWidths();
+  }
+
+  // Call this just before changing anything. A tag lets a quick series of the same change
+  // (like dragging the colour picker) count as one step.
+  function record(tag) {
+    const now = Date.now();
+    if (tag && tag === lastTag && now - lastTime < 1000) {
+      lastTime = now;
+      return;
+    }
+    lastTag = tag || '';
+    lastTime = now;
+    undoStack.push(snapshot());
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack.length = 0;
+  }
+
+  function undo() {
+    if (editing) commitEdit(0, 0);
+    if (!undoStack.length) {
+      setStatus('Nothing to undo');
+      return;
+    }
+    redoStack.push(snapshot());
+    restore(undoStack.pop());
+    lastTag = '';
+    clearClip();
+    refreshAll();
+    updateBars();
+    setStatus('Undone (' + undoStack.length + ' more steps can be undone)');
+  }
+
+  function redo() {
+    if (editing) commitEdit(0, 0);
+    if (!redoStack.length) {
+      setStatus('Nothing to redo');
+      return;
+    }
+    undoStack.push(snapshot());
+    restore(redoStack.pop());
+    lastTag = '';
+    clearClip();
+    refreshAll();
+    updateBars();
+    setStatus('Redone');
+  }
+
+  // ---------- auto-save in the browser's own storage ----------
+  const SAVE_KEY = 'mini-excel-autosave-v1';
+  let saveTimer = null;
+
+  function toSaveData() {
+    const cells = {};
+    const keys = new Set([...sheet.raw.keys(), ...styles.keys()]);
+    for (const k of keys) {
+      const [c, r] = k.split(',').map(Number);
+      const entry = {};
+      const raw = sheet.getRaw(c, r);
+      if (raw) entry.v = raw;
+      const st = styles.get(k);
+      if (st && st.b) entry.b = 1;
+      if (st && st.i) entry.i = 1;
+      if (st && st.bg) entry.bg = st.bg;
+      cells[refName(c, r)] = entry;
+    }
+    const widths = {};
+    colWidths.forEach((w, c) => {
+      if (w !== DEFAULT_W) widths[colName(c)] = w;
+    });
+    return { app: 'mini-excel', version: 2, cells, cols: widths };
+  }
+
+  // Put saved data on the sheet. Returns how many cells it held.
+  function applyData(data) {
+    let count = 0;
+    for (const [ref, entry] of Object.entries(data.cells)) {
+      const p = parseRef(ref);
+      if (!p || p.c < 0 || p.r < 0 || p.c >= MAX_COLS || p.r >= MAX_ROWS || !entry) continue;
+      if (entry.v) sheet.setRaw(p.c, p.r, String(entry.v));
+      const st = {};
+      if (entry.b) st.b = true;
+      if (entry.i) st.i = true;
+      if (typeof entry.bg === 'string' && /^#[0-9a-fA-F]{6}$/.test(entry.bg)) st.bg = entry.bg;
+      if (st.b || st.i || st.bg) styles.set(key(p.c, p.r), st);
+      count++;
+    }
+    colWidths = new Array(MAX_COLS).fill(DEFAULT_W);
+    if (data.cols && typeof data.cols === 'object') {
+      for (const [name, w] of Object.entries(data.cols)) {
+        const p = parseRef(name + '1');
+        if (p && p.c >= 0 && p.c < MAX_COLS && typeof w === 'number') colWidths[p.c] = clamp(Math.round(w), 30, 600);
+      }
+    }
+    applyWidths();
+    return count;
+  }
+
+  function autosaveNow() {
+    try {
+      window.localStorage.setItem(SAVE_KEY, JSON.stringify(toSaveData()));
+    } catch (e) {
+      /* storage is not available (private window, full): the app still works */
+    }
+  }
+  function scheduleAutosave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(autosaveNow, 400);
+  }
+
   // ---------- update what is shown ----------
   function refreshCell(c, r) {
     if (editing && editing.c === c && editing.r === r) return; // don't disturb typing
@@ -99,6 +257,7 @@
   function refreshAll() {
     for (let r = 0; r < MAX_ROWS; r++) for (let c = 0; c < MAX_COLS; c++) refreshCell(c, r);
     updateSummary();
+    scheduleAutosave();
   }
 
   // ---------- the selected block ----------
@@ -227,12 +386,14 @@
 
   // Empty every cell in the selected block.
   function clearRange() {
+    record();
     eachInRange((c, r) => sheet.setRaw(c, r, ''));
     refreshAll();
     updateBars();
   }
 
   function setCell(c, r, text) {
+    if (text !== sheet.getRaw(c, r)) record();
     sheet.setRaw(c, r, text);
     refreshAll();
   }
@@ -324,6 +485,7 @@
   // Put a copied block down with its top-left corner at the selected cell.
   // One copied cell pasted onto a selected block fills the whole block.
   function pasteBlock(src) {
+    record();
     const g = range();
     const fill = src.cols === 1 && src.rows === 1 && isMulti(g);
     const spots = [];
@@ -405,6 +567,42 @@
     else setStatus('Nothing to paste yet. Select some cells and press Ctrl+C first.');
   }
 
+  // Ctrl+D / Ctrl+R: copy the top row (or left column) of the block over the rest of it.
+  // With only one row (or column) selected, copy from the cell above (or to the left).
+  function fillBlock(down) {
+    if (editing) commitEdit(0, 0);
+    const g = range();
+    let srcR = g.r1;
+    let srcC = g.c1;
+    let startR = g.r1 + 1;
+    let startC = g.c1 + 1;
+    if (down && g.r1 === g.r2) {
+      if (g.r1 === 0) return setStatus('There is nothing above to fill from');
+      srcR = g.r1 - 1;
+      startR = g.r1;
+    }
+    if (!down && g.c1 === g.c2) {
+      if (g.c1 === 0) return setStatus('There is nothing on the left to fill from');
+      srcC = g.c1 - 1;
+      startC = g.c1;
+    }
+    record();
+    let n = 0;
+    for (let r = g.r1; r <= g.r2; r++) {
+      for (let c = g.c1; c <= g.c2; c++) {
+        if (down ? r < startR : c < startC) continue;
+        const fc = down ? c : srcC;
+        const fr = down ? srcR : r;
+        sheet.setRaw(c, r, shiftFormula(sheet.getRaw(fc, fr), c - fc, r - fr));
+        setStyleOf(c, r, Object.assign({}, styles.get(key(fc, fr))));
+        n++;
+      }
+    }
+    refreshAll();
+    updateBars();
+    setStatus('Filled ' + n + (n === 1 ? ' cell ' : ' cells ') + (down ? 'down' : 'to the right'));
+  }
+
   // ---------- typing inside a cell ----------
   function startEdit(initialText) {
     if (editing) return;
@@ -448,6 +646,7 @@
     if (!editing) return;
     const { input, c, r } = editing;
     editing = null; // set first, so the blur event below does nothing
+    if (input.value !== sheet.getRaw(c, r)) record();
     sheet.setRaw(c, r, input.value);
     refreshAll();
     select(c + dc, r + dr);
@@ -465,7 +664,8 @@
 
   // ---------- formatting ----------
   // Apply a style change to every selected cell.
-  function changeStyle(change) {
+  function changeStyle(change, tag) {
+    record(tag);
     eachInRange((c, r) => {
       const k = key(c, r);
       const st = Object.assign({}, styles.get(k));
@@ -503,24 +703,11 @@
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  // Save everything (formulas + formatting) so it can be opened again later.
+  // Save everything (formulas + formatting + column widths) so it can be opened again later.
   function saveFile() {
-    const cells = {};
-    const keys = new Set([...sheet.raw.keys(), ...styles.keys()]);
-    for (const k of keys) {
-      const [c, r] = k.split(',').map(Number);
-      const entry = {};
-      const raw = sheet.getRaw(c, r);
-      if (raw) entry.v = raw;
-      const st = styles.get(k);
-      if (st && st.b) entry.b = 1;
-      if (st && st.i) entry.i = 1;
-      if (st && st.bg) entry.bg = st.bg;
-      cells[refName(c, r)] = entry;
-    }
-    const data = { app: 'mini-excel', version: 1, cells };
+    const data = toSaveData();
     download('my-sheet.json', JSON.stringify(data, null, 2), 'application/json');
-    setStatus('Saved ' + keys.size + ' cells to my-sheet.json (check your Downloads folder)');
+    setStatus('Saved ' + Object.keys(data.cells).length + ' cells to my-sheet.json (check your Downloads folder)');
   }
 
   // CSV only holds the shown values (no formulas, no formatting).
@@ -547,8 +734,11 @@
   }
 
   function resetSheet() {
+    record();
     sheet.clear();
     styles.clear();
+    colWidths = new Array(MAX_COLS).fill(DEFAULT_W);
+    applyWidths();
     clearClip();
   }
 
@@ -592,18 +782,7 @@
       return;
     }
     resetSheet();
-    let count = 0;
-    for (const [ref, entry] of Object.entries(data.cells)) {
-      const p = parseRef(ref);
-      if (!p || p.c < 0 || p.r < 0 || p.c >= MAX_COLS || p.r >= MAX_ROWS || !entry) continue;
-      if (entry.v) sheet.setRaw(p.c, p.r, String(entry.v));
-      const st = {};
-      if (entry.b) st.b = true;
-      if (entry.i) st.i = true;
-      if (typeof entry.bg === 'string' && /^#[0-9a-fA-F]{6}$/.test(entry.bg)) st.bg = entry.bg;
-      if (st.b || st.i || st.bg) styles.set(key(p.c, p.r), st);
-      count++;
-    }
+    const count = applyData(data);
     finishLoading('Opened ' + name + ' (' + count + ' cells)');
   }
 
@@ -621,12 +800,62 @@
   });
 
   // ---------- mouse ----------
+  // Is the pointer on the right edge of a column letter? (that edge is the resize handle)
+  const onEdge = (th, x) => th.classList.contains('colhead') && x > th.getBoundingClientRect().right - 6;
+  let resizing = null; // { c, startX, startW, recorded }
+
+  function fitColumn(c) {
+    const ctx = document.createElement('canvas').getContext('2d');
+    ctx.font = getComputedStyle(tds[0][c]).font;
+    let widest = ctx.measureText(colName(c)).width;
+    for (let r = 0; r < MAX_ROWS; r++) {
+      const text = sheet.display(c, r);
+      if (text) widest = Math.max(widest, ctx.measureText(text).width * ((styles.get(key(c, r)) || {}).b ? 1.1 : 1));
+    }
+    record();
+    colWidths[c] = clamp(Math.ceil(widest) + 14, 40, 500);
+    applyWidths();
+    scheduleAutosave();
+    setStatus('Column ' + colName(c) + ' fitted to its text (double-click the edge)');
+  }
+
+  table.addEventListener('mousemove', (e) => {
+    if (resizing) return;
+    const th = e.target.closest && e.target.closest('th.colhead');
+    table.style.cursor = th && onEdge(th, e.clientX) ? 'col-resize' : '';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!resizing) return;
+    if (!resizing.recorded) {
+      record();
+      resizing.recorded = true;
+    }
+    colWidths[resizing.c] = clamp(resizing.startW + e.clientX - resizing.startX, 30, 600);
+    applyWidths();
+  });
+  document.addEventListener('mouseup', () => {
+    if (resizing) {
+      if (resizing.recorded) {
+        scheduleAutosave();
+        setStatus('Column ' + colName(resizing.c) + ' is now ' + colWidths[resizing.c] + ' pixels wide');
+      }
+      resizing = null;
+      table.style.cursor = '';
+    }
+  });
+
   table.addEventListener('mousedown', (e) => {
     if (e.target.tagName === 'INPUT') return; // clicking inside the cell editor
     const td = e.target.closest('td');
     const th = e.target.closest('th');
     if (!td && !th) return;
     e.preventDefault();
+    if (th && onEdge(th, e.clientX)) {
+      const c = colHeads.indexOf(th);
+      resizing = { c, startX: e.clientX, startW: colWidths[c], recorded: false };
+      return;
+    }
     if (editing) commitEdit(0, 0);
     gridWrap.focus({ preventScroll: true });
     if (td) {
@@ -662,8 +891,47 @@
     dragging = false;
   });
 
+  // Phones: a quick second tap on the same cell starts typing (a finger has no double-click).
+  let touchStart = null;
+  let lastTap = { t: 0, c: -1, r: -1 };
+  table.addEventListener(
+    'touchstart',
+    (e) => {
+      const t = e.touches[0];
+      touchStart = e.touches.length === 1 ? { x: t.clientX, y: t.clientY } : null;
+    },
+    { passive: true }
+  );
+  table.addEventListener(
+    'touchend',
+    (e) => {
+      const td = e.target.closest && e.target.closest('td');
+      const t = e.changedTouches[0];
+      const moved = !touchStart || Math.abs(t.clientX - touchStart.x) > 10 || Math.abs(t.clientY - touchStart.y) > 10;
+      touchStart = null;
+      if (!td || e.target.tagName === 'INPUT' || moved) return; // scrolling is not a tap
+      const c = Number(td.dataset.c);
+      const r = Number(td.dataset.r);
+      const now = Date.now();
+      if (now - lastTap.t < 450 && lastTap.c === c && lastTap.r === r) {
+        e.preventDefault();
+        lastTap = { t: 0, c: -1, r: -1 };
+        select(c, r);
+        startEdit();
+      } else {
+        lastTap = { t: now, c, r };
+      }
+    },
+    { passive: false }
+  );
+
   table.addEventListener('dblclick', (e) => {
     if (e.target.tagName === 'INPUT') return;
+    const head = e.target.closest('th.colhead');
+    if (head && onEdge(head, e.clientX)) {
+      fitColumn(colHeads.indexOf(head));
+      return;
+    }
     const td = e.target.closest('td');
     if (!td) return;
     select(Number(td.dataset.c), Number(td.dataset.r));
@@ -701,6 +969,18 @@
       } else if (k === 'v') {
         e.preventDefault();
         doPaste();
+      } else if (k === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (k === 'y' || (k === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      } else if (k === 'd') {
+        e.preventDefault();
+        fillBlock(true);
+      } else if (k === 'r') {
+        e.preventDefault();
+        fillBlock(false);
       }
       return;
     }
@@ -818,7 +1098,7 @@
   fillColor.addEventListener('input', () =>
     changeStyle((st) => {
       st.bg = fillColor.value;
-    })
+    }, 'fill')
   );
   fillColor.addEventListener('change', () => gridWrap.focus({ preventScroll: true }));
   $('btn-nofill').addEventListener('click', () =>
@@ -826,6 +1106,10 @@
       delete st.bg;
     })
   );
+  $('btn-undo').addEventListener('click', undo);
+  $('btn-redo').addEventListener('click', redo);
+  $('btn-filldown').addEventListener('click', () => fillBlock(true));
+  $('btn-fillright').addEventListener('click', () => fillBlock(false));
   $('btn-cut').addEventListener('click', () => doCopy(true));
   $('btn-copy').addEventListener('click', () => doCopy(false));
   $('btn-paste').addEventListener('click', doPaste);
@@ -840,8 +1124,21 @@
 
   // ---------- start ----------
   build();
+  let restored = 0;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(SAVE_KEY) || 'null');
+    if (saved && typeof saved.cells === 'object' && saved.cells) restored = applyData(saved);
+  } catch (e) {
+    restored = 0; // nothing saved yet, or it could not be read: start empty
+  }
   refreshAll();
   select(0, 0);
   gridWrap.focus({ preventScroll: true });
-  setStatus('Ready - click a cell and type. Start with = for a formula, for example =SUM(A1:A3)');
+  setStatus(
+    restored
+      ? 'Welcome back - your last sheet was restored (' + restored + ' cells). It saves itself as you work.'
+      : window.matchMedia && window.matchMedia('(pointer: coarse)').matches
+      ? 'Tap a cell to select it, tap it again quickly to type. Start with = for a formula.'
+      : 'Ready - click a cell and type. Start with = for a formula, for example =SUM(A1:A3)'
+  );
 })();

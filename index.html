@@ -6,11 +6,19 @@
       http-equiv="Content-Security-Policy"
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
     />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#217346" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Mini Excel" />
     <title>Mini Excel</title>
+    <link rel="manifest" href="manifest.webmanifest" />
+    <link rel="icon" href="icons/icon-192.png" />
+    <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
-    <div id="titlebar">Mini Excel</div>
+    <div id="titlebar"><span>Mini Excel</span><button class="btn" id="btn-install" hidden title="Install Mini Excel as an app on this device">Install app</button></div>
 
     <div id="toolbar">
       <div class="group">
@@ -18,6 +26,10 @@
         <button class="btn" id="btn-open" title="Open a .json or .csv file (Ctrl+O)">Open</button>
         <button class="btn" id="btn-save" title="Save as .json - keeps formulas and formatting (Ctrl+S)">Save</button>
         <button class="btn" id="btn-csv" title="Export the shown values as .csv">Export CSV</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btn-undo" title="Undo the last change (Ctrl+Z)">Undo</button>
+        <button class="btn" id="btn-redo" title="Redo (Ctrl+Y)">Redo</button>
       </div>
       <div class="group">
         <button class="btn" id="btn-cut" title="Cut the selected cells (Ctrl+X)">Cut</button>
@@ -31,6 +43,10 @@
           Fill <input type="color" id="fill-color" value="#ffff99" />
         </label>
         <button class="btn" id="btn-nofill" title="Remove the fill color">No fill</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btn-filldown" title="Fill the selected cells down from the top one (Ctrl+D)">Fill down</button>
+        <button class="btn" id="btn-fillright" title="Fill the selected cells to the right from the left one (Ctrl+R)">Fill right</button>
       </div>
     </div>
 
@@ -54,5 +70,6 @@
     <script src="src/engine.js"></script>
     <script src="src/csv.js"></script>
     <script src="src/grid.js"></script>
+    <script src="src/pwa.js"></script>
   </body>
 </html>

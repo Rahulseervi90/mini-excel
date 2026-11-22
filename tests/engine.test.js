@@ -294,5 +294,104 @@ test('CSV with tabs (used for the clipboard)', () => {
   assert.deepStrictEqual(parseCSV('a,b'), [['a', 'b']]); // the default is still a comma
 });
 
+// ---------- update 3: more functions ----------
+const TABLE = { A1: 'apple', B1: '10', C1: '1.5', A2: 'banana', B2: '20', C2: '0.5', A3: 'cherry', B3: '30', C3: '2' };
+
+test('lookup: VLOOKUP exact and approximate', () => {
+  assert.strictEqual(calc('=VLOOKUP("banana",A1:C3,2,FALSE)', TABLE), '20');
+  assert.strictEqual(calc('=VLOOKUP("CHERRY",A1:C3,3,FALSE)', TABLE), '2'); // not case sensitive
+  assert.strictEqual(calc('=VLOOKUP("zzz",A1:C3,2,FALSE)', TABLE), '#N/A');
+  assert.strictEqual(calc('=VLOOKUP("banana",A1:C3,4,FALSE)', TABLE), '#REF!');
+  assert.strictEqual(calc('=VLOOKUP(25,B1:C3,2)', TABLE), '0.5'); // approximate: the last one that is <= 25 (20)
+  assert.strictEqual(calc('=VLOOKUP(5,B1:C3,2)', TABLE), '#N/A'); // smaller than everything
+  assert.strictEqual(calc('=IFERROR(VLOOKUP("zzz",A1:C3,2,FALSE),"none")', TABLE), 'none');
+});
+
+test('lookup: HLOOKUP, INDEX, MATCH', () => {
+  const row = { A1: 'x', B1: 'y', C1: 'z', A2: '1', B2: '2', C2: '3' };
+  assert.strictEqual(calc('=HLOOKUP("y",A1:C2,2,FALSE)', row), '2');
+  assert.strictEqual(calc('=HLOOKUP("q",A1:C2,2,FALSE)', row), '#N/A');
+  assert.strictEqual(calc('=HLOOKUP("y",A1:C2,3,FALSE)', row), '#REF!');
+  assert.strictEqual(calc('=INDEX(A1:C3,2,2)', TABLE), '20');
+  assert.strictEqual(calc('=INDEX(A1:C3,3,1)', TABLE), 'cherry');
+  assert.strictEqual(calc('=INDEX(A1:C1,2)', TABLE), '10'); // one row: the second cell
+  assert.strictEqual(calc('=INDEX(A1:C3,4,1)', TABLE), '#REF!');
+  assert.strictEqual(calc('=MATCH("cherry",A1:A3,0)', TABLE), '3');
+  assert.strictEqual(calc('=MATCH("nope",A1:A3,0)', TABLE), '#N/A');
+  assert.strictEqual(calc('=MATCH(25,B1:B3,1)', TABLE), '2');
+  assert.strictEqual(calc('=INDEX(A1:A3,MATCH(20,B1:B3,0))', TABLE), 'banana'); // the two work together
+});
+
+test('maths: ROUNDUP, ROUNDDOWN, EXP, LN, LOG, SIGN', () => {
+  assert.strictEqual(calc('=ROUNDUP(1.21,1)'), '1.3');
+  assert.strictEqual(calc('=ROUNDUP(-1.21,1)'), '-1.3');
+  assert.strictEqual(calc('=ROUNDDOWN(1.29,1)'), '1.2');
+  assert.strictEqual(calc('=ROUNDDOWN(-1.29,1)'), '-1.2');
+  assert.strictEqual(calc('=ROUNDUP(1234,-2)'), '1300');
+  assert.strictEqual(calc('=ROUNDDOWN(1299,-2)'), '1200');
+  assert.strictEqual(calc('=ROUNDUP(5)'), '5');
+  assert.strictEqual(calc('=EXP(0)'), '1');
+  assert.strictEqual(calc('=LN(1)'), '0');
+  assert.strictEqual(calc('=LN(0)'), '#NUM!');
+  assert.strictEqual(calc('=LOG10(1000)'), '3');
+  assert.strictEqual(calc('=LOG(8,2)'), '3');
+  assert.strictEqual(calc('=LOG(100)'), '2');
+  assert.strictEqual(calc('=LOG(-1)'), '#NUM!');
+  assert.strictEqual(calc('=SIGN(-7)'), '-1');
+  assert.strictEqual(calc('=SIGN(0)'), '0');
+});
+
+test('statistics: LARGE, SMALL, COUNTBLANK, AVERAGEIF', () => {
+  assert.strictEqual(calc('=LARGE(B1:B3,1)', TABLE), '30');
+  assert.strictEqual(calc('=LARGE(B1:B3,2)', TABLE), '20');
+  assert.strictEqual(calc('=SMALL(B1:B3,1)', TABLE), '10');
+  assert.strictEqual(calc('=LARGE(B1:B3,4)', TABLE), '#NUM!');
+  assert.strictEqual(calc('=SMALL(B1:B3,0)', TABLE), '#NUM!');
+  assert.strictEqual(calc('=COUNTBLANK(D1:D5)', TABLE), '5');
+  assert.strictEqual(calc('=COUNTBLANK(A1:A5)', TABLE), '2');
+  assert.strictEqual(calc('=AVERAGEIF(B1:B3,">10")', TABLE), '25');
+  assert.strictEqual(calc('=AVERAGEIF(A1:A3,"banana",B1:B3)', TABLE), '20');
+  assert.strictEqual(calc('=AVERAGEIF(B1:B3,">100")', TABLE), '#DIV/0!');
+});
+
+test('text: MID, FIND, SEARCH, SUBSTITUTE, REPT', () => {
+  assert.strictEqual(calc('=MID("Hello world",7,5)'), 'world');
+  assert.strictEqual(calc('=MID("abc",2,100)'), 'bc');
+  assert.strictEqual(calc('=MID("abc",0,1)'), '#VALUE!');
+  assert.strictEqual(calc('=FIND("o","Hello world")'), '5');
+  assert.strictEqual(calc('=FIND("o","Hello world",6)'), '8');
+  assert.strictEqual(calc('=FIND("O","Hello world")'), '#VALUE!'); // FIND cares about capitals
+  assert.strictEqual(calc('=SEARCH("O","Hello world")'), '5'); // SEARCH does not
+  assert.strictEqual(calc('=SUBSTITUTE("a-b-c","-","+")'), 'a+b+c');
+  assert.strictEqual(calc('=SUBSTITUTE("abc","","x")'), 'abc');
+  assert.strictEqual(calc('=REPT("ab",3)'), 'ababab');
+  assert.strictEqual(calc('=REPT("x",-1)'), '#VALUE!');
+  assert.strictEqual(calc('=LEN(REPT("x",50))'), '50');
+});
+
+test('checks: ISNUMBER, ISTEXT, ISBLANK', () => {
+  const c = { A1: '5', A2: 'hi' };
+  assert.strictEqual(calc('=ISNUMBER(A1)', c), 'TRUE');
+  assert.strictEqual(calc('=ISNUMBER(A2)', c), 'FALSE');
+  assert.strictEqual(calc('=ISTEXT(A2)', c), 'TRUE');
+  assert.strictEqual(calc('=ISTEXT(A1)', c), 'FALSE');
+  assert.strictEqual(calc('=ISBLANK(A3)', c), 'TRUE');
+  assert.strictEqual(calc('=ISBLANK(A1)', c), 'FALSE');
+  assert.strictEqual(calc('=IF(ISBLANK(A3),"empty","full")', c), 'empty');
+});
+
+test('dates: TODAY and NOW look like dates', () => {
+  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(calc('=TODAY()')), calc('=TODAY()'));
+  assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(calc('=NOW()')), calc('=NOW()'));
+  assert.strictEqual(calc('=LEN(TODAY())'), '10');
+  assert.strictEqual(calc('=TODAY(1)'), '#ERROR!');
+});
+
+test('old functions still work with ranges that now know their width', () => {
+  assert.strictEqual(calc('=SUM(A1:C3)', { A1: '1', B2: '2', C3: '3' }), '6');
+  assert.strictEqual(calc('=COUNTIF(A1:B2,">0")', { A1: '1', B2: '2' }), '2');
+  assert.strictEqual(calc('=SUMIF(A1:A3,">1",B1:B3)', { A1: '1', A2: '2', A3: '3', B1: '10', B2: '20', B3: '30' }), '50');
+});
+
 console.log('\n' + passed + ' test groups passed, ' + failed + ' failed');
 if (failed) process.exit(1);

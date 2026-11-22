@@ -86,8 +86,9 @@
 
   // A cell range such as A1:B3 arrives inside functions as one of these.
   class Range {
-    constructor(values) {
-      this.values = values; // flat list of the cell values
+    constructor(values, cols) {
+      this.values = values; // flat list of the cell values, row by row
+      this.cols = cols || values.length || 1; // how many cells wide the block is
     }
   }
 
@@ -449,6 +450,40 @@
     return sign * Math.round(Number((abs / m).toPrecision(15))) * m;
   }
 
+  function roundDir(x, digits, up) {
+    const m = Math.pow(10, digits);
+    const y = Number((Math.abs(x) * m).toPrecision(15));
+    const r = (up ? Math.ceil(y) : Math.floor(y)) / m;
+    return x < 0 ? -r : r;
+  }
+
+  const sameKey = (x, y) => (typeof x === 'string' && typeof y === 'string' ? x.toLowerCase() === y.toLowerCase() : x === y);
+
+  // Where does v sit in list? exact: first equal one. Otherwise the last one that is <= v (list is sorted).
+  function lookupIndex(v, list, exact) {
+    if (exact) {
+      for (let i = 0; i < list.length; i++) if (sameKey(list[i], v)) return i;
+      return -1;
+    }
+    let best = -1;
+    for (let i = 0; i < list.length; i++) {
+      const x = list[i];
+      if (x === null || typeof x !== typeof v) continue;
+      const lo = typeof x === 'string' ? x.toLowerCase() : x;
+      const hi = typeof v === 'string' ? v.toLowerCase() : v;
+      if (lo <= hi) best = i;
+      else break;
+    }
+    return best;
+  }
+
+  function todayText(withTime) {
+    const d = new Date();
+    const two = (n) => String(n).padStart(2, '0');
+    const day = d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
+    return withTime ? day + ' ' + two(d.getHours()) + ':' + two(d.getMinutes()) : day;
+  }
+
   const F = {
     // maths
     SUM: (a) => sum(nums(a)),
@@ -532,6 +567,177 @@
       const n = a.length > 1 ? Math.trunc(N(a[1])) : 1;
       if (n < 0) throw err('#VALUE!');
       return n === 0 ? '' : toText(sc(a[0])).slice(-n);
+    },
+
+    // more maths
+    ROUNDUP: (a) => (chk(a, 1, 2), roundDir(N(a[0]), a.length > 1 ? Math.trunc(N(a[1])) : 0, true)),
+    ROUNDDOWN: (a) => (chk(a, 1, 2), roundDir(N(a[0]), a.length > 1 ? Math.trunc(N(a[1])) : 0, false)),
+    EXP: (a) => (chk(a, 1, 1), Math.exp(N(a[0]))),
+    LN: (a) => {
+      chk(a, 1, 1);
+      const x = N(a[0]);
+      if (x <= 0) throw err('#NUM!');
+      return Math.log(x);
+    },
+    LOG10: (a) => {
+      chk(a, 1, 1);
+      const x = N(a[0]);
+      if (x <= 0) throw err('#NUM!');
+      return Math.log10(x);
+    },
+    LOG: (a) => {
+      chk(a, 1, 2);
+      const x = N(a[0]);
+      const base = a.length > 1 ? N(a[1]) : 10;
+      if (x <= 0 || base <= 0 || base === 1) throw err('#NUM!');
+      return Math.log(x) / Math.log(base);
+    },
+    SIGN: (a) => (chk(a, 1, 1), Math.sign(N(a[0]))),
+    LARGE: (a) => {
+      chk(a, 2, 2);
+      const n = nums([a[0]]).sort((x, y) => y - x);
+      const k = Math.trunc(N(a[1]));
+      if (k < 1 || k > n.length) throw err('#NUM!');
+      return n[k - 1];
+    },
+    SMALL: (a) => {
+      chk(a, 2, 2);
+      const n = nums([a[0]]).sort((x, y) => x - y);
+      const k = Math.trunc(N(a[1]));
+      if (k < 1 || k > n.length) throw err('#NUM!');
+      return n[k - 1];
+    },
+    COUNTBLANK: (a) => (chk(a, 1, 1), flat(a).filter((v) => v === null || v === '').length),
+    AVERAGEIF: (a) => {
+      chk(a, 2, 3);
+      if (!(a[0] instanceof Range)) throw err('#VALUE!');
+      const test = makeCriteria(sc(a[1]));
+      const avgRange = a.length > 2 ? a[2] : a[0];
+      if (!(avgRange instanceof Range)) throw err('#VALUE!');
+      let total = 0;
+      let count = 0;
+      a[0].values.forEach((v, i) => {
+        const s = avgRange.values[i];
+        if (test(v) && typeof s === 'number') {
+          total += s;
+          count++;
+        }
+      });
+      if (!count) throw err('#DIV/0!');
+      return total / count;
+    },
+
+    // more text
+    MID: (a) => {
+      chk(a, 3, 3);
+      const start = Math.trunc(N(a[1]));
+      const len = Math.trunc(N(a[2]));
+      if (start < 1 || len < 0) throw err('#VALUE!');
+      return toText(sc(a[0])).substr(start - 1, len);
+    },
+    FIND: (a) => {
+      chk(a, 2, 3);
+      const start = a.length > 2 ? Math.trunc(N(a[2])) : 1;
+      const within = toText(sc(a[1]));
+      if (start < 1 || start > within.length + 1) throw err('#VALUE!');
+      const i = within.indexOf(toText(sc(a[0])), start - 1);
+      if (i < 0) throw err('#VALUE!');
+      return i + 1;
+    },
+    SEARCH: (a) => {
+      chk(a, 2, 3);
+      const start = a.length > 2 ? Math.trunc(N(a[2])) : 1;
+      const within = toText(sc(a[1])).toLowerCase();
+      if (start < 1 || start > within.length + 1) throw err('#VALUE!');
+      const i = within.indexOf(toText(sc(a[0])).toLowerCase(), start - 1);
+      if (i < 0) throw err('#VALUE!');
+      return i + 1;
+    },
+    SUBSTITUTE: (a) => {
+      chk(a, 3, 3);
+      const find = toText(sc(a[1]));
+      const text = toText(sc(a[0]));
+      return find === '' ? text : text.split(find).join(toText(sc(a[2])));
+    },
+    REPT: (a) => {
+      chk(a, 2, 2);
+      const n = Math.trunc(N(a[1]));
+      const text = toText(sc(a[0]));
+      if (n < 0 || text.length * n > 10000) throw err('#VALUE!');
+      return text.repeat(n);
+    },
+
+    // checking what is in a cell
+    ISNUMBER: (a) => (chk(a, 1, 1), typeof sc(a[0]) === 'number'),
+    ISTEXT: (a) => (chk(a, 1, 1), typeof sc(a[0]) === 'string'),
+    ISBLANK: (a) => (chk(a, 1, 1), sc(a[0]) === null),
+
+    // today's date and time (as text, like 2026-11-21)
+    TODAY: (a) => {
+      chk(a, 0, 0);
+      return todayText(false);
+    },
+    NOW: (a) => {
+      chk(a, 0, 0);
+      return todayText(true);
+    },
+
+    // looking things up in a table
+    VLOOKUP: (a) => {
+      chk(a, 3, 4);
+      const t = a[1];
+      if (!(t instanceof Range)) throw err('#VALUE!');
+      const col = Math.trunc(N(a[2]));
+      if (col < 1 || col > t.cols) throw err('#REF!');
+      const rows = t.values.length / t.cols;
+      const keys = [];
+      for (let i = 0; i < rows; i++) keys.push(t.values[i * t.cols]);
+      const i = lookupIndex(sc(a[0]), keys, a.length > 3 && !toBool(sc(a[3])));
+      if (i < 0) throw err('#N/A');
+      return t.values[i * t.cols + col - 1];
+    },
+    HLOOKUP: (a) => {
+      chk(a, 3, 4);
+      const t = a[1];
+      if (!(t instanceof Range)) throw err('#VALUE!');
+      const rows = t.values.length / t.cols;
+      const row = Math.trunc(N(a[2]));
+      if (row < 1 || row > rows) throw err('#REF!');
+      const i = lookupIndex(sc(a[0]), t.values.slice(0, t.cols), a.length > 3 && !toBool(sc(a[3])));
+      if (i < 0) throw err('#N/A');
+      return t.values[(row - 1) * t.cols + i];
+    },
+    INDEX: (a) => {
+      chk(a, 2, 3);
+      const t = a[0];
+      if (!(t instanceof Range)) throw err('#VALUE!');
+      const rows = t.values.length / t.cols;
+      let row = Math.trunc(N(a[1]));
+      let col = a.length > 2 ? Math.trunc(N(a[2])) : 1;
+      if (a.length === 2 && rows === 1) {
+        col = row; // INDEX(A1:E1, 3) means the third cell of a single row
+        row = 1;
+      }
+      if (row < 1 || col < 1 || row > rows || col > t.cols) throw err('#REF!');
+      return t.values[(row - 1) * t.cols + col - 1];
+    },
+    MATCH: (a) => {
+      chk(a, 2, 3);
+      const t = a[1];
+      if (!(t instanceof Range)) throw err('#VALUE!');
+      const type = a.length > 2 ? Math.trunc(N(a[2])) : 1;
+      const v = sc(a[0]);
+      let i = -1;
+      if (type === 0) i = lookupIndex(v, t.values, true);
+      else if (type > 0) i = lookupIndex(v, t.values, false);
+      else {
+        for (let k = 0; k < t.values.length; k++) {
+          const x = t.values[k];
+          if (x !== null && typeof x === typeof v && x >= v) i = k;
+        }
+      }
+      if (i < 0) throw err('#N/A');
+      return i + 1;
     },
 
     // logic  (IF and IFERROR are special - see evalFn)
@@ -672,7 +878,7 @@
           this.checkBounds(n.c2, n.r2);
           const values = [];
           for (let r = n.r1; r <= n.r2; r++) for (let c = n.c1; c <= n.c2; c++) values.push(this.cellValue(c, r));
-          return new Range(values);
+          return new Range(values, n.c2 - n.c1 + 1);
         }
         case 'un': {
           const v = toNumber(sc(this.evalNode(n.e)));
