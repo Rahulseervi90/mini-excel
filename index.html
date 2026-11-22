@@ -43,6 +43,35 @@
           Fill <input type="color" id="fill-color" value="#ffff99" />
         </label>
         <button class="btn" id="btn-nofill" title="Remove the fill color">No fill</button>
+        <select class="btn" id="num-format" title="How numbers look in the selected cells">
+          <option value="general">General</option>
+          <option value="number">Number 1,234.50</option>
+          <option value="currency">Rupees ₹1,234.50</option>
+          <option value="percent">Percent 12.5%</option>
+          <option value="date">Date 22-Nov-2026</option>
+          <option value="datetime">Date and time</option>
+        </select>
+      </div>
+      <div class="group">
+        <button class="btn" id="btn-insrow" title="Insert row(s) above the selection">+ Row</button>
+        <button class="btn" id="btn-delrow" title="Delete the selected row(s)">- Row</button>
+        <button class="btn" id="btn-inscol" title="Insert column(s) left of the selection">+ Col</button>
+        <button class="btn" id="btn-delcol" title="Delete the selected column(s)">- Col</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btn-sortasc" title="Sort the table by the selected column, smallest first">Sort A-Z</button>
+        <button class="btn" id="btn-sortdesc" title="Sort the table by the selected column, largest first">Sort Z-A</button>
+        <label class="chk" title="Tick this if the first row holds titles: sort and filter will leave it alone">
+          <input type="checkbox" id="chk-header" /> Header row
+        </label>
+      </div>
+      <div class="group">
+        <input class="filter" id="filter-text" type="text" spellcheck="false" placeholder="Filter: text or >5" title="Show only rows where the selected column contains this text, or a number test like >5, <=10, =3" />
+        <button class="btn" id="btn-filter" title="Hide the rows that do not match">Filter</button>
+        <button class="btn" id="btn-showall" title="Show every row again">Show all</button>
+      </div>
+      <div class="group">
+        <button class="btn" id="btn-chart" title="Make a chart from the selected cells">Chart</button>
       </div>
       <div class="group">
         <button class="btn" id="btn-filldown" title="Fill the selected cells down from the top one (Ctrl+D)">Fill down</button>
@@ -65,10 +94,33 @@
       <span id="summary"></span>
     </div>
 
+    <div id="chart-modal" hidden>
+      <div class="chart-box" role="dialog" aria-label="Chart">
+        <div class="chart-bar">
+          <select id="chart-type" class="btn" title="Chart type">
+            <option value="column">Column chart</option>
+            <option value="line">Line chart</option>
+            <option value="pie">Pie chart</option>
+          </select>
+          <select id="chart-labels" class="btn" title="Is the first column a list of names?">
+            <option value="auto">First column: auto</option>
+            <option value="first">First column = names</option>
+            <option value="none">First column = numbers</option>
+          </select>
+          <input id="chart-title" class="filter" type="text" placeholder="Chart title" spellcheck="false" />
+          <button class="btn" id="chart-save" title="Save the chart as a picture">Save picture</button>
+          <button class="btn" id="chart-close" title="Close (Esc)">Close</button>
+        </div>
+        <div id="chart-source"></div>
+        <div id="chart-body"></div>
+      </div>
+    </div>
+
     <input type="file" id="file-input" accept=".json,.csv,text/csv,application/json" hidden />
 
     <script src="src/engine.js"></script>
     <script src="src/csv.js"></script>
+    <script src="src/chart.js"></script>
     <script src="src/grid.js"></script>
     <script src="src/pwa.js"></script>
   </body>

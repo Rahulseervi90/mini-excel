@@ -91,6 +91,23 @@ body {
   background: #fff;
 }
 
+select.btn {
+  padding: 3px 6px;
+}
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.filter {
+  font: inherit;
+  width: 150px;
+  padding: 3px 6px;
+  border: 1px solid #c6c6c6;
+  border-radius: 3px;
+}
+
 /* ---- name box + formula bar ---- */
 #formula-row {
   display: flex;
@@ -294,6 +311,10 @@ body {
   .group {
     flex: none;
   }
+  .filter {
+    min-height: 34px;
+    font-size: 16px;
+  }
   .btn {
     min-height: 36px;
     min-width: 38px;
@@ -331,4 +352,54 @@ body {
   #summary {
     white-space: normal;
   }
+}
+
+/* ---- chart window ---- */
+#chart-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 12px;
+}
+#chart-modal[hidden] {
+  display: none;
+}
+.chart-box {
+  background: #fff;
+  border-radius: 6px;
+  padding: 10px;
+  width: min(720px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
+}
+.chart-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.chart-bar .filter {
+  flex: 1;
+  min-width: 120px;
+}
+#chart-source {
+  color: #666;
+  font-size: 12px;
+  margin: 6px 2px;
+}
+#chart-body svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--line);
+}
+/* rows hidden by a filter: show a green row-number strip so you can tell the list is filtered */
+#grid.filtered .rowhead {
+  color: var(--green);
+  font-weight: 700;
 }

@@ -359,6 +359,59 @@
     return ast;
   }
 
+  // ---------- inserting and deleting rows and columns ----------
+  // When a row or column is added or removed, every formula that points at cells below/right
+  // of it must move its pointers. axis: 'r' (rows) or 'c' (columns). kind: 'ins' or 'del'.
+  // at: first row/column affected (from 0). n: how many.
+  const REF_OR_RANGE = /(?<![A-Za-z0-9_.$])(\$?[A-Za-z]{1,3}\$?\d+)(?::(\$?[A-Za-z]{1,3}\$?\d+))?(?![A-Za-z0-9_(.])/g;
+  const ONE_REF = /^(\$?)([A-Za-z]{1,3})(\$?)(\d+)$/;
+
+  function adjustFormula(raw, axis, kind, at, n) {
+    if (typeof raw !== 'string' || raw.length < 2 || raw[0] !== '=') return raw;
+    const ins = kind === 'ins';
+    const last = at + n - 1;
+    const point = (p) => (ins ? (p >= at ? p + n : p) : p < at ? p : p > last ? p - n : null);
+    const span = (s, e) => {
+      if (ins) return [point(s), point(e)];
+      const s2 = s < at ? s : s > last ? s - n : at;
+      const e2 = e < at ? e : e > last ? e - n : at - 1;
+      return e2 < s2 ? null : [s2, e2];
+    };
+    const parts = (text) => {
+      const m = ONE_REF.exec(text);
+      return { dc: m[1], c: colIndex(m[2]), dr: m[3], r: parseInt(m[4], 10) - 1 };
+    };
+    const write = (x) => x.dc + colName(x.c) + x.dr + (x.r + 1);
+
+    return raw
+      .split(/("(?:[^"]|"")*")/)
+      .map((piece, i) => {
+        if (i % 2 === 1) return piece;
+        return piece.replace(REF_OR_RANGE, (whole, first, second) => {
+          const a = parts(first);
+          if (!second) {
+            const np = point(axis === 'r' ? a.r : a.c);
+            if (np === null) return 'ZZ0'; // the cell was deleted: ZZ0 shows #REF!
+            if (axis === 'r') a.r = np;
+            else a.c = np;
+            return write(a);
+          }
+          const b = parts(second);
+          const sp = axis === 'r' ? span(Math.min(a.r, b.r), Math.max(a.r, b.r)) : span(Math.min(a.c, b.c), Math.max(a.c, b.c));
+          if (!sp || sp[0] === null || sp[1] === null) return 'ZZ0';
+          if (axis === 'r') {
+            a.r = sp[0];
+            b.r = sp[1];
+          } else {
+            a.c = sp[0];
+            b.c = sp[1];
+          }
+          return write(a) + ':' + write(b);
+        });
+      })
+      .join('');
+  }
+
   // ---------- the built-in functions ----------
   // Each one receives a list of arguments. A cell range arrives as a Range.
 
@@ -477,11 +530,48 @@
     return best;
   }
 
-  function todayText(withTime) {
+  // Dates are numbers, like in Excel: the count of days since 30 Dec 1899 (so 1 Jan 2026 is 46023).
+  const DAY_MS = 86400000;
+  const EPOCH_OFFSET = 25569; // days between 1899-12-30 and 1970-01-01
+  const dateToSerial = (y, m, d) => Date.UTC(y, m - 1, d) / DAY_MS + EPOCH_OFFSET;
+  const serialToDate = (n) => new Date(Math.round((n - EPOCH_OFFSET) * DAY_MS));
+  function nowSerial(withTime) {
     const d = new Date();
-    const two = (n) => String(n).padStart(2, '0');
-    const day = d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate());
-    return withTime ? day + ' ' + two(d.getHours()) + ':' + two(d.getMinutes()) : day;
+    const day = dateToSerial(d.getFullYear(), d.getMonth() + 1, d.getDate());
+    return withTime ? day + (d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds()) / 86400 : day;
+  }
+
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const FORMATS = ['general', 'number', 'currency', 'percent', 'date', 'datetime'];
+
+  // Show a number in a chosen style. Returns null for "general" (the caller shows it the normal way).
+  function formatNumber(n, fmt) {
+    const two = (x) => String(x).padStart(2, '0');
+    const money = (x) => x.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    switch (fmt) {
+      case 'number':
+        return money(n);
+      case 'currency':
+        return (n < 0 ? '-' : '') + '₹' + money(Math.abs(n));
+      case 'percent':
+        return parseFloat((n * 100).toFixed(2)) + '%';
+      case 'date':
+      case 'datetime': {
+        if (n < -657000 || n > 2958465) return '#NUM!'; // outside years 100 to 9999
+        const d = serialToDate(n);
+        const day = two(d.getUTCDate()) + '-' + MONTHS[d.getUTCMonth()] + '-' + d.getUTCFullYear();
+        return fmt === 'date' ? day : day + ' ' + two(d.getUTCHours()) + ':' + two(d.getUTCMinutes());
+      }
+      default:
+        return null;
+    }
+  }
+
+  // A cell holding just =TODAY() or =NOW() shows as a date by itself, like in Excel.
+  function autoFormat(raw) {
+    if (typeof raw !== 'string') return null;
+    const m = /^=\s*(TODAY|NOW)\(\s*\)\s*$/i.exec(raw);
+    return m ? (m[1].toUpperCase() === 'TODAY' ? 'date' : 'datetime') : null;
   }
 
   const F = {
@@ -672,15 +762,21 @@
     ISTEXT: (a) => (chk(a, 1, 1), typeof sc(a[0]) === 'string'),
     ISBLANK: (a) => (chk(a, 1, 1), sc(a[0]) === null),
 
-    // today's date and time (as text, like 2026-11-21)
-    TODAY: (a) => {
-      chk(a, 0, 0);
-      return todayText(false);
+    // dates (numbers: days since 1899-12-30; use the Date format to see them as dates)
+    TODAY: (a) => (chk(a, 0, 0), nowSerial(false)),
+    NOW: (a) => (chk(a, 0, 0), nowSerial(true)),
+    DATE: (a) => {
+      chk(a, 3, 3);
+      const y = Math.trunc(N(a[0]));
+      const m = Math.trunc(N(a[1]));
+      const d = Math.trunc(N(a[2]));
+      if (y < 0 || y > 9999) throw err('#NUM!');
+      return dateToSerial(y < 100 ? 1900 + y : y, m, d);
     },
-    NOW: (a) => {
-      chk(a, 0, 0);
-      return todayText(true);
-    },
+    YEAR: (a) => (chk(a, 1, 1), serialToDate(N(a[0])).getUTCFullYear()),
+    MONTH: (a) => (chk(a, 1, 1), serialToDate(N(a[0])).getUTCMonth() + 1),
+    DAY: (a) => (chk(a, 1, 1), serialToDate(N(a[0])).getUTCDate()),
+    WEEKDAY: (a) => (chk(a, 1, 1), serialToDate(N(a[0])).getUTCDay() + 1), // 1 = Sunday
 
     // looking things up in a table
     VLOOKUP: (a) => {
@@ -792,6 +888,34 @@
 
     getRaw(c, r) {
       return this.raw.get(Sheet.key(c, r)) || '';
+    }
+
+    // Insert or delete rows/columns: cells move, and every formula is rewritten to follow.
+    // Returns how many cells were lost (deleted, or pushed off the edge of the grid).
+    shiftStructure(axis, kind, at, n) {
+      const next = new Map();
+      const limit = axis === 'r' ? MAX_ROWS : MAX_COLS;
+      let lost = 0;
+      for (const [k, v] of this.raw) {
+        let [c, r] = k.split(',').map(Number);
+        const p = axis === 'r' ? r : c;
+        let np;
+        if (kind === 'ins') np = p >= at ? p + n : p;
+        else if (p >= at && p < at + n) {
+          lost++;
+          continue;
+        } else np = p >= at + n ? p - n : p;
+        if (np >= limit) {
+          lost++;
+          continue;
+        }
+        if (axis === 'r') r = np;
+        else c = np;
+        next.set(c + ',' + r, adjustFormula(v, axis, kind, at, n));
+      }
+      this.raw = next;
+      this.cache.clear();
+      return lost;
     }
 
     clear() {
@@ -957,5 +1081,9 @@
     refName,
     parse,
     shiftFormula,
+    adjustFormula,
+    formatNumber,
+    autoFormat,
+    FORMATS,
   };
 });

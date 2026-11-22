@@ -4,13 +4,14 @@
  * After that the app opens even with no internet. When you publish a new version,
  * change VERSION below so everyone gets the new files.
  */
-const VERSION = 'mini-excel-v4';
+const VERSION = 'mini-excel-v6';
 const FILES = [
   './',
   './index.html',
   './style.css',
   './src/engine.js',
   './src/csv.js',
+  './src/chart.js',
   './src/grid.js',
   './src/pwa.js',
   './manifest.webmanifest',

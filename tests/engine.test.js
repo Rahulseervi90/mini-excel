@@ -1,7 +1,8 @@
 // Tests for the formula engine. Run with:  npm test
 // Each line says: "if the cells contain THIS, cell X should show THAT".
 const assert = require('assert');
-const { Sheet, parseRef, colName, MAX_ROWS, shiftFormula } = require('../src/engine.js');
+const { Sheet, parseRef, colName, MAX_ROWS, MAX_COLS, shiftFormula, adjustFormula, formatNumber, autoFormat } = require('../src/engine.js');
+const { chartData, chartSVG } = require('../src/chart.js');
 const { parseCSV, toCSV } = require('../src/csv.js');
 
 let passed = 0;
@@ -380,17 +381,170 @@ test('checks: ISNUMBER, ISTEXT, ISBLANK', () => {
   assert.strictEqual(calc('=IF(ISBLANK(A3),"empty","full")', c), 'empty');
 });
 
-test('dates: TODAY and NOW look like dates', () => {
-  assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(calc('=TODAY()')), calc('=TODAY()'));
-  assert.ok(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(calc('=NOW()')), calc('=NOW()'));
-  assert.strictEqual(calc('=LEN(TODAY())'), '10');
-  assert.strictEqual(calc('=TODAY(1)'), '#ERROR!');
-});
-
 test('old functions still work with ranges that now know their width', () => {
   assert.strictEqual(calc('=SUM(A1:C3)', { A1: '1', B2: '2', C3: '3' }), '6');
   assert.strictEqual(calc('=COUNTIF(A1:B2,">0")', { A1: '1', B2: '2' }), '2');
   assert.strictEqual(calc('=SUMIF(A1:A3,">1",B1:B3)', { A1: '1', A2: '2', A3: '3', B1: '10', B2: '20', B3: '30' }), '50');
+});
+
+// ---------- update 5: dates, formats, inserting and deleting, charts ----------
+test('dates are numbers (days since 1899-12-30, like Excel)', () => {
+  assert.strictEqual(calc('=DATE(2026,1,1)'), '46023');
+  assert.strictEqual(calc('=DATE(1900,3,1)'), '61');
+  assert.strictEqual(calc('=DATE(2026,11,22)-DATE(2026,11,1)'), '21');
+  assert.strictEqual(calc('=DATE(2026,13,1)'), calc('=DATE(2027,1,1)')); // month 13 rolls into next year
+  assert.strictEqual(calc('=DATE(2026,2,30)'), calc('=DATE(2026,3,2)'));
+  assert.strictEqual(calc('=YEAR(DATE(2026,11,22))'), '2026');
+  assert.strictEqual(calc('=MONTH(DATE(2026,11,22))'), '11');
+  assert.strictEqual(calc('=DAY(DATE(2026,11,22))'), '22');
+  assert.strictEqual(calc('=WEEKDAY(DATE(2026,11,22))'), '1'); // a Sunday
+  assert.strictEqual(calc('=WEEKDAY(DATE(2026,11,23))'), '2');
+  assert.strictEqual(calc('=DATE(2026,1)'), '#ERROR!');
+  const today = Number(calc('=TODAY()'));
+  assert.ok(Number.isInteger(today) && today > 46000 && today < 60000, today);
+  const now = Number(calc('=NOW()'));
+  assert.ok(now >= today && now < today + 1.0001, now);
+  assert.strictEqual(calc('=YEAR(TODAY())'), String(new Date().getFullYear()));
+  assert.strictEqual(calc('=TODAY(1)'), '#ERROR!');
+});
+
+test('number formats', () => {
+  assert.strictEqual(formatNumber(1234.5, 'number'), '1,234.50');
+  assert.strictEqual(formatNumber(1234567.891, 'number'), '12,34,567.89'); // Indian grouping
+  assert.strictEqual(formatNumber(0, 'number'), '0.00');
+  assert.strictEqual(formatNumber(1234.5, 'currency'), '₹1,234.50');
+  assert.strictEqual(formatNumber(-5, 'currency'), '-₹5.00');
+  assert.strictEqual(formatNumber(0.125, 'percent'), '12.5%');
+  assert.strictEqual(formatNumber(1, 'percent'), '100%');
+  assert.strictEqual(formatNumber(0.00004, 'percent'), '0%');
+  assert.strictEqual(formatNumber(46023, 'date'), '01-Jan-2026');
+  assert.strictEqual(formatNumber(46348.5, 'datetime'), '22-Nov-2026 12:00');
+  assert.strictEqual(formatNumber(1e12, 'date'), '#NUM!');
+  assert.strictEqual(formatNumber(5, 'general'), null);
+  assert.strictEqual(formatNumber(5, 'nonsense'), null);
+  assert.strictEqual(autoFormat('=TODAY()'), 'date');
+  assert.strictEqual(autoFormat('= now( )'), 'datetime');
+  assert.strictEqual(autoFormat('=TODAY()+1'), null);
+  assert.strictEqual(autoFormat('5'), null);
+});
+
+test('inserting and deleting: formulas follow (rows)', () => {
+  // insert one row at row 3 (index 2)
+  assert.strictEqual(adjustFormula('=A1+A3+A5', 'r', 'ins', 2, 1), '=A1+A4+A6');
+  assert.strictEqual(adjustFormula('=$A$3+A$3+$A3', 'r', 'ins', 2, 1), '=$A$4+A$4+$A4'); // $ does not stop it
+  assert.strictEqual(adjustFormula('=SUM(A1:A5)', 'r', 'ins', 2, 1), '=SUM(A1:A6)'); // inside: grows
+  assert.strictEqual(adjustFormula('=SUM(A1:A2)', 'r', 'ins', 2, 1), '=SUM(A1:A2)'); // above: unchanged
+  assert.strictEqual(adjustFormula('=SUM(A3:A5)', 'r', 'ins', 2, 1), '=SUM(A4:A6)'); // below: moves
+  assert.strictEqual(adjustFormula('=SUM(A1:A3)', 'r', 'ins', 2, 2), '=SUM(A1:A5)');
+  assert.strictEqual(adjustFormula('=B1+C1', 'r', 'ins', 0, 3), '=B4+C4');
+  // delete row 3
+  assert.strictEqual(adjustFormula('=A1+A4', 'r', 'del', 2, 1), '=A1+A3');
+  assert.strictEqual(adjustFormula('=A3', 'r', 'del', 2, 1), '=ZZ0'); // the cell is gone
+  assert.strictEqual(adjustFormula('=SUM(A1:A5)', 'r', 'del', 2, 1), '=SUM(A1:A4)'); // shrinks
+  assert.strictEqual(adjustFormula('=SUM(A3:A5)', 'r', 'del', 2, 1), '=SUM(A3:A4)');
+  assert.strictEqual(adjustFormula('=SUM(A1:A3)', 'r', 'del', 2, 1), '=SUM(A1:A2)');
+  assert.strictEqual(adjustFormula('=SUM(A3:A3)', 'r', 'del', 2, 1), '=SUM(ZZ0)'); // whole range gone
+  assert.strictEqual(adjustFormula('=SUM(A2:A3)', 'r', 'del', 1, 2), '=SUM(ZZ0)');
+  assert.strictEqual(adjustFormula('=SUM(A1:A9)', 'r', 'del', 2, 3), '=SUM(A1:A6)');
+  assert.strictEqual(adjustFormula('=A1', 'r', 'del', 5, 2), '=A1'); // far below: unchanged
+});
+
+test('inserting and deleting: formulas follow (columns), and things that must not change', () => {
+  assert.strictEqual(adjustFormula('=A1+B1+C1', 'c', 'ins', 1, 1), '=A1+C1+D1');
+  assert.strictEqual(adjustFormula('=SUM(A1:C1)', 'c', 'ins', 1, 1), '=SUM(A1:D1)');
+  assert.strictEqual(adjustFormula('=SUM(B1:C1)', 'c', 'del', 0, 1), '=SUM(A1:B1)');
+  assert.strictEqual(adjustFormula('=B1', 'c', 'del', 1, 1), '=ZZ0');
+  assert.strictEqual(adjustFormula('=A5+B5', 'c', 'ins', 1, 1), '=A5+C5'); // only the column axis moves
+  assert.strictEqual(adjustFormula('="B3"&B3', 'r', 'ins', 0, 1), '="B3"&B4'); // text in quotes untouched
+  assert.strictEqual(adjustFormula('=LOG10(B3)', 'r', 'ins', 0, 1), '=LOG10(B4)'); // function names untouched
+  assert.strictEqual(adjustFormula('hello A3', 'r', 'ins', 0, 1), 'hello A3'); // plain text untouched
+  assert.strictEqual(adjustFormula('=', 'r', 'ins', 0, 1), '=');
+  assert.strictEqual(adjustFormula('=Z1', 'c', 'ins', 0, 1), '=AA1'); // may leave the grid: #REF! when worked out
+  assert.strictEqual(calc(adjustFormula('=Z1', 'c', 'ins', 0, 1)), '#REF!');
+});
+
+test('inserting and deleting: whole sheet', () => {
+  const show = make({ A1: '1', A2: '2', A3: '3', A4: '=SUM(A1:A3)', B1: '=A4*2', C5: '=A2' });
+  const lost = show.sheet.shiftStructure('r', 'ins', 1, 1); // a blank row above row 2
+  assert.strictEqual(lost, 0);
+  assert.strictEqual(show('A1'), '1');
+  assert.strictEqual(show('A2'), '');
+  assert.strictEqual(show('A3'), '2');
+  assert.strictEqual(show('A5'), '6'); // the sum moved down and still adds 1+2+3
+  assert.strictEqual(show.sheet.getRaw(0, 4), '=SUM(A1:A4)');
+  assert.strictEqual(show('B1'), '12'); // B1 pointed at the sum, now at A5
+  assert.strictEqual(show.sheet.getRaw(2, 5), '=A3'); // C5 moved to C6 and follows A2 -> A3
+  // delete that blank row again: back to the start
+  show.sheet.shiftStructure('r', 'del', 1, 1);
+  assert.strictEqual(show.sheet.getRaw(0, 3), '=SUM(A1:A3)');
+  assert.strictEqual(show('A4'), '6');
+  // deleting a row that something points at gives #REF!
+  const lost2 = show.sheet.shiftStructure('r', 'del', 0, 1); // delete row 1
+  assert.strictEqual(lost2, 2); // A1 and B1 were in that row
+  assert.strictEqual(show('A3'), '5'); // SUM(A1:A2) of the 2 and 3
+  assert.strictEqual(show.sheet.getRaw(0, 2), '=SUM(A1:A2)');
+  // columns
+  const s2 = make({ A1: '1', B1: '2', C1: '=A1+B1' });
+  s2.sheet.shiftStructure('c', 'ins', 1, 1);
+  assert.strictEqual(s2.sheet.getRaw(3, 0), '=A1+C1');
+  assert.strictEqual(s2('D1'), '3');
+  s2.sheet.shiftStructure('c', 'del', 0, 1); // delete A: the formula pointed at it
+  assert.strictEqual(s2('C1'), '#REF!');
+  // pushed off the bottom of the grid
+  const s3 = make({ A200: 'last', A1: 'first' });
+  assert.strictEqual(s3.sheet.shiftStructure('r', 'ins', 0, 1), 1);
+  assert.strictEqual(s3('A2'), 'first');
+  assert.strictEqual(s3('A200'), '');
+});
+
+test('charts: choosing labels and series', () => {
+  const d = chartData([['Month', 'Sales', 'Cost'], ['Jan', 10, 4], ['Feb', 20, 8], ['Mar', 15, 6]]);
+  assert.deepStrictEqual(d.labels, ['Jan', 'Feb', 'Mar']);
+  assert.deepStrictEqual(d.series.map((x) => x.name), ['Sales', 'Cost']);
+  assert.deepStrictEqual(d.series[0].values, [10, 20, 15]);
+  assert.strictEqual(d.header, true);
+  const e = chartData([['a', 1], ['b', 2]]); // no header
+  assert.deepStrictEqual(e.labels, ['a', 'b']);
+  assert.strictEqual(e.series[0].name, 'Series 1');
+  assert.strictEqual(e.header, false);
+  const f = chartData([[1], [2], [3]]); // one column
+  assert.deepStrictEqual(f.labels, ['1', '2', '3']);
+  assert.deepStrictEqual(f.series[0].values, [1, 2, 3]);
+  const g = chartData([[2020, 5], [2021, 6]]); // numbers in the first column are data unless told otherwise
+  assert.strictEqual(g.series.length, 2);
+  assert.strictEqual(chartData([[2020, 5], [2021, 6]], { labels: true }).series.length, 1);
+  assert.deepStrictEqual(chartData([[2020, 5], [2021, 6]], { labels: true }).labels, ['2020', '2021']);
+  assert.deepStrictEqual(chartData([['a', 1], ['b', 'oops'], ['c', null]]).series[0].values, [1, 0, 0]); // not numbers count as 0
+  assert.deepStrictEqual(chartData([]).series, []);
+  assert.deepStrictEqual(chartData([['x']]).series.length, 1);
+});
+
+test('charts: pictures', () => {
+  const d = chartData([['Month', 'Sales', 'Cost'], ['Jan', 10, 4], ['Feb', 20, 8], ['Mar', 15, 6]]);
+  const count = (svg, tag) => (svg.match(new RegExp('<' + tag + '[ >]', 'g')) || []).length;
+  const col = chartSVG('column', d, { title: 'A & <B>' });
+  assert.ok(col.startsWith('<svg') && col.endsWith('</svg>'));
+  assert.strictEqual(count(col, 'rect'), 1 + 6 + 2); // background + 3x2 bars + 2 legend squares
+  assert.ok(col.includes('A &amp; &lt;B&gt;'), 'the title is escaped');
+  assert.ok(!col.includes('<B>'));
+  const line = chartSVG('line', d, {});
+  assert.strictEqual(count(line, 'polyline'), 2);
+  assert.strictEqual(count(line, 'circle'), 6);
+  const pie = chartSVG('pie', d, {});
+  assert.strictEqual(count(pie, 'path'), 3);
+  assert.ok(pie.includes('Jan') && pie.includes('Mar'));
+  const one = chartSVG('pie', chartData([['a', 5]]), {});
+  assert.strictEqual(count(one, 'circle'), 1); // a single slice is a full circle
+  assert.ok(chartSVG('pie', chartData([['a', 0], ['b', -2]]), {}).includes('Nothing to draw'));
+  assert.ok(chartSVG('column', chartData([]), {}).includes('Nothing to draw'));
+  const neg = chartSVG('column', chartData([['a', -5], ['b', 10]]), {});
+  assert.ok(!/NaN|undefined|Infinity/.test(neg), 'no broken numbers in the picture');
+  for (const t of ['column', 'line', 'pie']) {
+    const big = [];
+    for (let i = 0; i < 40; i++) big.push(['label number ' + i, i * 3.5]);
+    assert.ok(!/NaN|undefined|Infinity/.test(chartSVG(t, chartData(big), {})), t);
+  }
+  assert.ok(!/NaN|undefined|Infinity/.test(chartSVG('line', chartData([['a', 7], ['b', 7]]), {}))); // all the same
 });
 
 console.log('\n' + passed + ' test groups passed, ' + failed + ' failed');

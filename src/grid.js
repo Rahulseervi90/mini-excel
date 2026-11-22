@@ -7,7 +7,8 @@
 (function () {
   'use strict';
 
-  const { Sheet, FormulaError, MAX_COLS, MAX_ROWS, colName, refName, parseRef, shiftFormula } = window.Engine;
+  const { Sheet, FormulaError, MAX_COLS, MAX_ROWS, colName, refName, parseRef, shiftFormula, formatNumber, autoFormat, FORMATS } = window.Engine;
+  const { chartData, chartSVG } = window.Chart;
   const { parseCSV, toCSV } = window.Csv;
 
   // ---------- the app's memory ----------
@@ -24,6 +25,7 @@
   const DEFAULT_W = 90;
   let colWidths = new Array(MAX_COLS).fill(DEFAULT_W); // width of each column in pixels
   const cols = []; // the <col> tags that hold those widths
+  const hiddenRows = new Set(); // rows hidden by the filter
 
   // ---------- handy shortcuts ----------
   const $ = (id) => document.getElementById(id);
@@ -37,6 +39,10 @@
   const btnBold = $('btn-bold');
   const btnItalic = $('btn-italic');
   const fillColor = $('fill-color');
+  const numFormat = $('num-format');
+  const chkHeader = $('chk-header');
+  const filterText = $('filter-text');
+  const chartModal = $('chart-modal');
 
   const key = (c, r) => c + ',' + r;
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -191,13 +197,14 @@
       if (st && st.b) entry.b = 1;
       if (st && st.i) entry.i = 1;
       if (st && st.bg) entry.bg = st.bg;
+      if (st && st.nf) entry.nf = st.nf;
       cells[refName(c, r)] = entry;
     }
     const widths = {};
     colWidths.forEach((w, c) => {
       if (w !== DEFAULT_W) widths[colName(c)] = w;
     });
-    return { app: 'mini-excel', version: 2, cells, cols: widths };
+    return { app: 'mini-excel', version: 3, cells, cols: widths };
   }
 
   // Put saved data on the sheet. Returns how many cells it held.
@@ -211,7 +218,8 @@
       if (entry.b) st.b = true;
       if (entry.i) st.i = true;
       if (typeof entry.bg === 'string' && /^#[0-9a-fA-F]{6}$/.test(entry.bg)) st.bg = entry.bg;
-      if (st.b || st.i || st.bg) styles.set(key(p.c, p.r), st);
+      if (typeof entry.nf === 'string' && FORMATS.includes(entry.nf) && entry.nf !== 'general') st.nf = entry.nf;
+      if (hasStyle(st)) styles.set(key(p.c, p.r), st);
       count++;
     }
     colWidths = new Array(MAX_COLS).fill(DEFAULT_W);
@@ -238,11 +246,27 @@
   }
 
   // ---------- update what is shown ----------
+  const hasStyle = (st) => !!(st && (st.b || st.i || st.bg || st.nf));
+
+  // The text a cell shows: the answer, in the chosen number style (money, percent, date...).
+  function shownText(c, r) {
+    const v = sheet.getValue(c, r);
+    if (typeof v === 'number') {
+      const st = styles.get(key(c, r));
+      const nf = (st && st.nf) || autoFormat(sheet.getRaw(c, r));
+      if (nf) {
+        const t = formatNumber(v, nf);
+        if (t !== null) return t;
+      }
+    }
+    return sheet.display(c, r);
+  }
+
   function refreshCell(c, r) {
     if (editing && editing.c === c && editing.r === r) return; // don't disturb typing
     const td = tds[r][c];
     const v = sheet.getValue(c, r);
-    const text = sheet.display(c, r);
+    const text = shownText(c, r);
     if (td.firstElementChild || td.textContent !== text) td.textContent = text;
     td.classList.remove('editing');
     td.classList.toggle('num', typeof v === 'number');
@@ -316,6 +340,7 @@
     btnBold.classList.toggle('on', !!st.b);
     btnItalic.classList.toggle('on', !!st.i);
     if (st.bg) fillColor.value = st.bg;
+    numFormat.value = st.nf || 'general';
   }
 
   const fmt = (n) => String(parseFloat(n.toPrecision(12)));
@@ -381,7 +406,13 @@
   }
 
   function move(dc, dr) {
-    select(sel.c + dc, sel.r + dr);
+    let r = sel.r + dr;
+    if (dr !== 0 && hiddenRows.size) {
+      const step = Math.sign(dr);
+      while (r >= 0 && r < MAX_ROWS && hiddenRows.has(r)) r += step; // jump over filtered-out rows
+      if (r < 0 || r >= MAX_ROWS) r = sel.r;
+    }
+    select(sel.c + dc, r);
   }
 
   // Empty every cell in the selected block.
@@ -448,7 +479,7 @@
       const shown = [];
       for (let c = g.c1; c <= g.c2; c++) {
         line.push({ raw: sheet.getRaw(c, r), st: Object.assign({}, styles.get(key(c, r))) });
-        shown.push(sheet.display(c, r));
+        shown.push(shownText(c, r));
       }
       cells.push(line);
       shownRows.push(shown);
@@ -478,7 +509,7 @@
 
   function setStyleOf(c, r, st) {
     if (st === undefined) return; // pasted text: keep the formatting already there
-    if (st.b || st.i || st.bg) styles.set(key(c, r), { b: !!st.b, i: !!st.i, bg: st.bg });
+    if (hasStyle(st)) styles.set(key(c, r), { b: !!st.b, i: !!st.i, bg: st.bg, nf: st.nf });
     else styles.delete(key(c, r));
   }
 
@@ -603,6 +634,292 @@
     setStatus('Filled ' + n + (n === 1 ? ' cell ' : ' cells ') + (down ? 'down' : 'to the right'));
   }
 
+  // ---------- number formats ----------
+  numFormat.addEventListener('change', () => {
+    const nf = numFormat.value;
+    changeStyle((st) => {
+      if (nf === 'general') delete st.nf;
+      else st.nf = nf;
+    });
+    gridWrap.focus({ preventScroll: true });
+  });
+
+  // ---------- rows and columns: insert and delete ----------
+  function changeLines(axis, kind) {
+    if (editing) commitEdit(0, 0);
+    const g = range();
+    const at = axis === 'r' ? g.r1 : g.c1;
+    const n = axis === 'r' ? g.r2 - g.r1 + 1 : g.c2 - g.c1 + 1;
+    const word = axis === 'r' ? 'row' : 'column';
+    const limit = axis === 'r' ? MAX_ROWS : MAX_COLS;
+    if (kind === 'del' && n >= limit) {
+      setStatus('That would delete every ' + word + '. Select fewer ' + word + 's, or use New for a blank sheet.');
+      return;
+    }
+    showAllRows();
+    record();
+    clearClip();
+    const lost = sheet.shiftStructure(axis, kind, at, n);
+    const moved = new Map();
+    for (const [k, v] of styles) {
+      let [c, r] = k.split(',').map(Number);
+      const p = axis === 'r' ? r : c;
+      let np;
+      if (kind === 'ins') np = p >= at ? p + n : p;
+      else if (p >= at && p < at + n) continue;
+      else np = p >= at + n ? p - n : p;
+      if (np >= limit) continue;
+      if (axis === 'r') r = np;
+      else c = np;
+      moved.set(key(c, r), v);
+    }
+    styles.clear();
+    moved.forEach((v, k) => styles.set(k, v));
+    if (axis === 'c') {
+      if (kind === 'ins') {
+        colWidths.splice(at, 0, ...new Array(n).fill(DEFAULT_W));
+        colWidths.length = MAX_COLS;
+      } else {
+        colWidths.splice(at, n);
+        while (colWidths.length < MAX_COLS) colWidths.push(DEFAULT_W);
+      }
+      applyWidths();
+    }
+    refreshAll();
+    select(sel.c, sel.r);
+    const label = (kind === 'ins' ? 'Inserted ' : 'Deleted ') + n + ' ' + word + (n === 1 ? '' : 's');
+    setStatus(label + (lost ? ' (' + lost + (lost === 1 ? ' cell was' : ' cells were') + ' removed)' : '') + '. Formulas were updated. Ctrl+Z undoes it.');
+  }
+
+  // ---------- sort and filter ----------
+  // The block of filled cells around a cell, like clicking inside a table in Excel.
+  function dataRegion(c0, r0) {
+    let c1 = c0;
+    let c2 = c0;
+    let r1 = r0;
+    let r2 = r0;
+    const anyFilled = (ca, cb, ra, rb) => {
+      for (let r = ra; r <= rb; r++) for (let c = ca; c <= cb; c++) if (sheet.getRaw(c, r) !== '') return true;
+      return false;
+    };
+    let grew = true;
+    while (grew) {
+      grew = false;
+      const ra = Math.max(0, r1 - 1);
+      const rb = Math.min(MAX_ROWS - 1, r2 + 1);
+      const ca = Math.max(0, c1 - 1);
+      const cb = Math.min(MAX_COLS - 1, c2 + 1);
+      if (c1 > 0 && anyFilled(c1 - 1, c1 - 1, ra, rb)) {
+        c1--;
+        grew = true;
+      }
+      if (c2 < MAX_COLS - 1 && anyFilled(c2 + 1, c2 + 1, ra, rb)) {
+        c2++;
+        grew = true;
+      }
+      if (r1 > 0 && anyFilled(ca, cb, r1 - 1, r1 - 1)) {
+        r1--;
+        grew = true;
+      }
+      if (r2 < MAX_ROWS - 1 && anyFilled(ca, cb, r2 + 1, r2 + 1)) {
+        r2++;
+        grew = true;
+      }
+    }
+    return { c1, r1, c2, r2 };
+  }
+
+  // The block to work on: your selection, or (if only one cell) the table around it.
+  function workBlock() {
+    const g = range();
+    return isMulti(g) ? g : dataRegion(sel.c, sel.r);
+  }
+
+  // Numbers come first, then text, then errors. Empty cells always go last.
+  const rankOf = (v) => (typeof v === 'number' ? 0 : v instanceof FormulaError ? 2 : 1);
+  function compareValues(a, b, asc) {
+    if (a === null || b === null) return a === b ? 0 : a === null ? 1 : -1;
+    const ra = rankOf(a);
+    const rb = rankOf(b);
+    let d;
+    if (ra !== rb) d = ra - rb;
+    else if (ra === 0) d = a - b;
+    else d = String(a).toLowerCase().localeCompare(String(b).toLowerCase());
+    return asc ? d : -d;
+  }
+
+  function sortBlock(asc) {
+    if (editing) commitEdit(0, 0);
+    const g = workBlock();
+    const keyCol = sel.c >= g.c1 && sel.c <= g.c2 ? sel.c : g.c1;
+    const first = g.r1 + (chkHeader.checked ? 1 : 0);
+    if (g.r2 - first < 1) {
+      setStatus('Select the cells to sort (at least two rows), or click inside your table.');
+      return;
+    }
+    showAllRows();
+    record();
+    const rows = [];
+    for (let r = first; r <= g.r2; r++) {
+      const cells = [];
+      for (let c = g.c1; c <= g.c2; c++) cells.push({ raw: sheet.getRaw(c, r), st: Object.assign({}, styles.get(key(c, r))) });
+      rows.push({ from: r, value: sheet.getValue(keyCol, r), cells });
+    }
+    rows.sort((x, y) => compareValues(x.value, y.value, asc));
+    rows.forEach((row, i) => {
+      const to = first + i;
+      row.cells.forEach((cell, j) => {
+        const c = g.c1 + j;
+        sheet.setRaw(c, to, shiftFormula(cell.raw, 0, to - row.from)); // a formula keeps pointing at its own row
+        setStyleOf(c, to, cell.st);
+      });
+    });
+    refreshAll();
+    updateBars();
+    setStatus(
+      'Sorted ' + rows.length + ' rows by column ' + colName(keyCol) + (asc ? ' (smallest first)' : ' (largest first)') +
+        (chkHeader.checked ? ', keeping the header row' : '') + '. Ctrl+Z undoes it.'
+    );
+  }
+
+  function showAllRows() {
+    if (!hiddenRows.size) return;
+    hiddenRows.forEach((r) => {
+      rowHeads[r].parentNode.style.display = '';
+    });
+    hiddenRows.clear();
+    table.classList.remove('filtered');
+  }
+
+  // Hide rows whose cell (in the active column) does not match. Text: contains. Numbers: >5  <=10  =3  <>0
+  function applyFilter() {
+    if (editing) commitEdit(0, 0);
+    const text = filterText.value.trim();
+    if (!text) {
+      showAllRows();
+      setStatus('Showing all rows');
+      return;
+    }
+    const g = workBlock();
+    const col = sel.c >= g.c1 && sel.c <= g.c2 ? sel.c : g.c1;
+    const first = g.r1 + (chkHeader.checked ? 1 : 0);
+    const num = /^(<=|>=|<>|<|>|=)\s*(-?\d+(?:\.\d+)?)$/.exec(text);
+    const test = (c, r) => {
+      const v = sheet.getValue(c, r);
+      if (num) {
+        if (typeof v !== 'number') return false;
+        const x = parseFloat(num[2]);
+        switch (num[1]) {
+          case '>': return v > x;
+          case '<': return v < x;
+          case '>=': return v >= x;
+          case '<=': return v <= x;
+          case '<>': return v !== x;
+          default: return v === x;
+        }
+      }
+      return shownText(c, r).toLowerCase().includes(text.toLowerCase());
+    };
+    showAllRows();
+    let shown = 0;
+    for (let r = first; r <= g.r2; r++) {
+      if (test(col, r)) shown++;
+      else hiddenRows.add(r);
+    }
+    hiddenRows.forEach((r) => {
+      rowHeads[r].parentNode.style.display = 'none';
+    });
+    table.classList.add('filtered');
+    if (hiddenRows.has(sel.r)) {
+      const next = [...Array(MAX_ROWS).keys()].find((r) => r >= first && r <= g.r2 && !hiddenRows.has(r));
+      if (next !== undefined) select(sel.c, next, false);
+    }
+    setStatus('Filter: showing ' + shown + ' of ' + (g.r2 - first + 1) + ' rows where column ' + colName(col) + ' matches "' + text + '". Press "Show all" to undo.');
+  }
+
+  // ---------- charts ----------
+  let chartRows = [];
+  let chartSource = '';
+  let chartPng = null;
+
+  function chartOptions() {
+    const labels = $('chart-labels').value;
+    return { labels: labels === 'auto' ? undefined : labels === 'first' };
+  }
+
+  function drawChart() {
+    const data = chartData(chartRows, chartOptions());
+    const svg = chartSVG($('chart-type').value, data, { title: $('chart-title').value.trim(), width: 640, height: 400 });
+    $('chart-body').innerHTML = svg;
+    chartPng = svg;
+  }
+
+  function openChart() {
+    if (editing) commitEdit(0, 0);
+    const g = workBlock();
+    if (g.c1 === g.c2 && g.r1 === g.r2 && sheet.getRaw(g.c1, g.r1) === '') {
+      setStatus('Select some cells with numbers first (for example A1:B5), then press Chart.');
+      return;
+    }
+    chartRows = [];
+    for (let r = g.r1; r <= g.r2; r++) {
+      const row = [];
+      for (let c = g.c1; c <= g.c2; c++) {
+        const v = sheet.getValue(c, r);
+        row.push(v instanceof FormulaError ? v.code : v);
+      }
+      chartRows.push(row);
+    }
+    chartSource = blockName(g);
+    $('chart-source').textContent = 'Data: ' + chartSource;
+    $('chart-labels').value = 'auto';
+    chartModal.hidden = false;
+    drawChart();
+    $('chart-type').focus();
+  }
+
+  function closeChart() {
+    chartModal.hidden = true;
+    $('chart-body').innerHTML = '';
+    gridWrap.focus({ preventScroll: true });
+  }
+
+  function saveChartPicture() {
+    if (!chartPng) return;
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1280;
+      canvas.height = 800;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob((blob) => {
+        if (!blob) return setStatus('Could not make the picture');
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'my-chart.png';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setStatus('Saved my-chart.png (check your Downloads folder)');
+      }, 'image/png');
+    };
+    img.onerror = () => setStatus('Could not make the picture');
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(chartPng);
+  }
+
+  ['chart-type', 'chart-labels'].forEach((id) => $(id).addEventListener('change', drawChart));
+  $('chart-title').addEventListener('input', drawChart);
+  $('chart-close').addEventListener('click', closeChart);
+  $('chart-save').addEventListener('click', saveChartPicture);
+  chartModal.addEventListener('mousedown', (e) => {
+    if (e.target === chartModal) closeChart(); // clicking the dark area outside the box
+  });
+
   // ---------- typing inside a cell ----------
   function startEdit(initialText) {
     if (editing) return;
@@ -670,7 +987,7 @@
       const k = key(c, r);
       const st = Object.assign({}, styles.get(k));
       change(st);
-      if (!st.b && !st.i && !st.bg) styles.delete(k);
+      if (!hasStyle(st)) styles.delete(k);
       else styles.set(k, st);
       refreshCell(c, r);
     });
@@ -726,7 +1043,7 @@
     const rows = [];
     for (let r = 0; r <= maxR; r++) {
       const row = [];
-      for (let c = 0; c <= maxC; c++) row.push(sheet.display(c, r));
+      for (let c = 0; c <= maxC; c++) row.push(shownText(c, r));
       rows.push(row);
     }
     download('my-sheet.csv', '\uFEFF' + toCSV(rows), 'text/csv;charset=utf-8');
@@ -734,6 +1051,7 @@
   }
 
   function resetSheet() {
+    showAllRows();
     record();
     sheet.clear();
     styles.clear();
@@ -809,7 +1127,7 @@
     ctx.font = getComputedStyle(tds[0][c]).font;
     let widest = ctx.measureText(colName(c)).width;
     for (let r = 0; r < MAX_ROWS; r++) {
-      const text = sheet.display(c, r);
+      const text = shownText(c, r);
       if (text) widest = Math.max(widest, ctx.measureText(text).width * ((styles.get(key(c, r)) || {}).b ? 1.1 : 1));
     }
     record();
@@ -940,6 +1258,10 @@
 
   // ---------- keyboard (when you are not typing inside a box) ----------
   document.addEventListener('keydown', (e) => {
+    if (!chartModal.hidden) {
+      if (e.key === 'Escape') closeChart();
+      return; // the chart window is open: the grid keys stay quiet
+    }
     const tag = e.target && e.target.tagName;
     if (editing || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
 
@@ -1090,7 +1412,7 @@
   // ---------- toolbar ----------
   // Keep the keyboard focus where it is when a toolbar button is clicked.
   $('toolbar').addEventListener('mousedown', (e) => {
-    if (e.target.tagName !== 'INPUT') e.preventDefault();
+    if (e.target.tagName !== 'INPUT' && e.target.tagName !== 'SELECT' && e.target.tagName !== 'OPTION') e.preventDefault();
   });
 
   btnBold.addEventListener('click', toggleBold);
@@ -1107,6 +1429,26 @@
     })
   );
   $('btn-undo').addEventListener('click', undo);
+  $('btn-insrow').addEventListener('click', () => changeLines('r', 'ins'));
+  $('btn-delrow').addEventListener('click', () => changeLines('r', 'del'));
+  $('btn-inscol').addEventListener('click', () => changeLines('c', 'ins'));
+  $('btn-delcol').addEventListener('click', () => changeLines('c', 'del'));
+  $('btn-sortasc').addEventListener('click', () => sortBlock(true));
+  $('btn-sortdesc').addEventListener('click', () => sortBlock(false));
+  $('btn-filter').addEventListener('click', applyFilter);
+  $('btn-showall').addEventListener('click', () => {
+    filterText.value = '';
+    showAllRows();
+    setStatus('Showing all rows');
+  });
+  filterText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      applyFilter();
+      gridWrap.focus({ preventScroll: true });
+    }
+  });
+  $('btn-chart').addEventListener('click', openChart);
   $('btn-redo').addEventListener('click', redo);
   $('btn-filldown').addEventListener('click', () => fillBlock(true));
   $('btn-fillright').addEventListener('click', () => fillBlock(false));
